@@ -76,7 +76,7 @@ void NewRpgInfo::Reset()
 {
     data = Idle{};
     startT = getMSTime();
-    travelPlan.Reset();
+    ClearTravel();
 }
 
 void NewRpgInfo::SetMoveFarTo(WorldPosition pos)

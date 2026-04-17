@@ -472,7 +472,7 @@ bool NewRpgTravelFlightAction::Execute(Event /*event*/)
     if (bot->GetDistance(data.fromPos) > INTERACTION_DISTANCE)
         return MoveFarTo(data.fromPos);
 
-    Creature* flightMaster = ObjectAccessor::GetCreature(*bot, data.fromFlightMasterGuid);
+    Creature* flightMaster = ObjectAccessor::GetCreature(*bot, data.fromFlightMaster    );
     if (!flightMaster || !flightMaster->IsAlive())
     {
         botAI->rpgInfo.ChangeToIdle();

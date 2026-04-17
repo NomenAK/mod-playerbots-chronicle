@@ -76,9 +76,10 @@ struct NewRpgInfo
     uint32 stuckTs{0};
     uint32 stuckAttempts{0};
     WorldPosition moveFarPos;
+    // Travel Node System
     TravelPlan travelPlan;
     bool HasActiveTravelPlan() const { return travelPlan.IsActive(); }
-    void ClearTravel();
+    void ClearTravel() { travelPlan.Reset(); }
 
     using RpgData = std::variant<
         Idle,

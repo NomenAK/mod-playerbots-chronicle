@@ -24,8 +24,8 @@ class Position;
 #define ANGLE_120_DEG (2.f * static_cast<float>(M_PI) / 3.f)
 
 // Default acceptable path types for GeneratePath
-constexpr uint32 DEFAULT_PATH_ACCEPT_MASK = 0x01 /*PATHFIND_NORMAL*/ | 0x04 /*PATHFIND_INCOMPLETE*/;
-uint32 typeOk = PATHFIND_NORMAL | PATHFIND_INCOMPLETE | PATHFIND_FARFROMPOLY;
+constexpr uint32 DEFAULT_PATH_ACCEPT_MASK = PATHFIND_NORMAL | PATHFIND_INCOMPLETE;
+constexpr uint32 RELAXED_PATH_ACCEPT_MASK = PATHFIND_NORMAL | PATHFIND_INCOMPLETE | PATHFIND_FARFROMPOLY;
 
 struct PathResult
 {
