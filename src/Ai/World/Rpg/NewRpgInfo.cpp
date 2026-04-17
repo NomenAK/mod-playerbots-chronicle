@@ -4,43 +4,33 @@
 
 #include "Timer.h"
 
-void NewRpgInfo::ClearTravel()
-{
-    travelPlan.Reset();
-}
-
 void NewRpgInfo::ChangeToGoGrind(WorldPosition pos)
 {
-    startT = getMSTime();
-    ClearTravel();
+    Reset();
     data = GoGrind{pos};
 }
 
 void NewRpgInfo::ChangeToGoCamp(WorldPosition pos)
 {
-    startT = getMSTime();
-    ClearTravel();
+    Reset();
     data = GoCamp{pos};
 }
 
 void NewRpgInfo::ChangeToWanderNpc()
 {
-    startT = getMSTime();
-    ClearTravel();
+    Reset();
     data = WanderNpc{};
 }
 
 void NewRpgInfo::ChangeToWanderRandom()
 {
-    startT = getMSTime();
-    ClearTravel();
+    Reset();
     data = WanderRandom{};
 }
 
 void NewRpgInfo::ChangeToDoQuest(uint32 questId, const Quest* quest)
 {
-    startT = getMSTime();
-    ClearTravel();
+    Reset();
     DoQuest do_quest;
     do_quest.questId = questId;
     do_quest.quest = quest;
@@ -49,8 +39,7 @@ void NewRpgInfo::ChangeToDoQuest(uint32 questId, const Quest* quest)
 
 void NewRpgInfo::ChangeToTravelFlight(ObjectGuid fromFlightMaster, std::vector<uint32> path)
 {
-    startT = getMSTime();
-    ClearTravel();
+    Reset();
     TravelFlight flight;
     flight.fromFlightMaster = fromFlightMaster;
     flight.path = std::move(path);
@@ -68,15 +57,13 @@ void NewRpgInfo::ChangeToOutdoorPvp(ObjectGuid::LowType capturePointSpawnId)
 
 void NewRpgInfo::ChangeToRest()
 {
-    startT = getMSTime();
-    ClearTravel();
+    Reset();
     data = Rest{};
 }
 
 void NewRpgInfo::ChangeToIdle()
 {
-    startT = getMSTime();
-    ClearTravel();
+    Reset();
     data = Idle{};
 }
 
@@ -89,7 +76,7 @@ void NewRpgInfo::Reset()
 {
     data = Idle{};
     startT = getMSTime();
-    ClearTravel();
+    travelPlan.Reset();
 }
 
 void NewRpgInfo::SetMoveFarTo(WorldPosition pos)

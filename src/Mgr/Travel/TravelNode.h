@@ -653,7 +653,6 @@ public:
                                     std::vector<WorldPosition>& startPath,
                                     Player* bot = nullptr);
 
-
     // Manage/update nodes
     void manageNodes(Unit* bot, bool mapFull = false);
 

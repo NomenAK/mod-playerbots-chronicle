@@ -292,7 +292,6 @@ bool NewRpgBaseAction::ForceToWait(uint32 duration, MovementPriority priority)
     return true;
 }
 
-
 bool NewRpgBaseAction::TakeFlight(std::vector<uint32> const& taxiNodes, Creature* flightMaster)
 {
     if (taxiNodes.size() < 2 || !flightMaster || !flightMaster->IsAlive())
@@ -1285,5 +1284,3 @@ bool NewRpgBaseAction::CheckRpgStatusAvailable(NewRpgStatus status)
     }
     return false;
 }
-
-
