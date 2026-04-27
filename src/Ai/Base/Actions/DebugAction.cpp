@@ -207,7 +207,7 @@ bool DebugAction::Execute(Event event)
                 endNode->setLinked(false);
         }
 
-        botAI->TellMasterNoFacing("Node " + name + " created. Run 'gen path' when done adding nodes.");
+        botAI->TellMasterNoFacing("Node " + name + " created. Use console command '.playerbots travel generatenode' to connect nodes.");
 
         return true;
     }
@@ -231,7 +231,8 @@ bool DebugAction::Execute(Event event)
             TravelNodeMap::instance().removeNode(startNode);
         }
 
-        botAI->TellMasterNoFacing("Node removed. Run 'gen path' when done editing nodes.");
+        botAI->TellMasterNoFacing("Node removed. Use console command '.playerbots travel generatenode' to finalize nodes.");
+
 
         return true;
     }
@@ -248,16 +249,17 @@ bool DebugAction::Execute(Event event)
                 node->removeLinkTo(path.first, true);
         return true;
     }
-    else if (text.find("gen node") != std::string::npos)
+    else if (text.find("gen node") != std::string::npos ||
+             text.find("gen path") != std::string::npos)
     {
-        botAI->TellMasterNoFacing("Regenerating travel nodes...");
-        std::thread([]() { TravelNodeMap::instance().generateAll(); }).detach();
-        return true;
-    }
-    else if (text.find("gen path") != std::string::npos)
-    {
-        botAI->TellMasterNoFacing("Regenerating travel paths...");
-        std::thread([]() { TravelNodeMap::instance().generateAll(); }).detach();
+        // Disabled: generateAll() touches Map / grid / mmap state that is only
+        // safe to mutate on the world thread. Running it from a detached worker
+        // (or from a bot tick on a MapUpdater thread) races with world updates
+        // and freezes the server. Use the console command instead, which runs
+        // synchronously on the world thread:
+        //   .playerbots travel generatenode
+        botAI->TellMasterNoFacing(
+            "Disabled in chat. Run '.playerbots travel generatenode' from the server console.");
         return true;
     }
     else if (text.find("crop path") != std::string::npos)

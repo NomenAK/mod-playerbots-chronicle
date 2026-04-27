@@ -1931,6 +1931,7 @@ void TravelNodeMap::generateAll()
     LOG_INFO("playerbots", "[GenerateAll] Regenerating: {} nodes", nodes.size());
 
     generatePaths(false);
+    hasToSave = true;
     saveNodeStore();
 
     BuildZoneIndex();
