@@ -7,6 +7,7 @@
 #define _PLAYERBOT_TRAVELMGR_H
 
 #include <boost/functional/hash.hpp>
+#include <cmath>
 #include <map>
 #include <random>
 
@@ -268,12 +269,6 @@ public:
     std::vector<mGridCoord> getmGridCoords(WorldPosition secondPos);
     std::vector<WorldPosition> frommGridCoord(mGridCoord GridCoord);
 
-    void loadMapAndVMap(uint32 mapId, uint8 x, uint8 y);
-
-    void loadMapAndVMap() { loadMapAndVMap(GetMapId(), getmGridCoord().first, getmGridCoord().second); }
-
-    void loadMapAndVMaps(WorldPosition secondPos);
-
     // Display functions
     WorldPosition getDisplayLocation();
     float getDisplayX() { return getDisplayLocation().GetPositionY() * -1.0; }
@@ -297,10 +292,26 @@ public:
 
     std::vector<WorldPosition> getPathTo(WorldPosition endPos, Unit* bot) { return endPos.getPathFrom(*this, bot); }
 
-    bool isPathTo(std::vector<WorldPosition> path, float maxDistance = sPlayerbotAIConfig.targetPosRecalcDistance)
+    // Cmangos-aligned (WorldPosition.h:317): the path "reaches" this
+    // position when its last point is on the same map, within
+    // maxDistance horizontally, and within maxZDistance vertically.
+    // 3D Euclidean distance would falsely accept paths that end the
+    // right horizontal distance from us but on a roof/floor below.
+    // maxDistance == 0 falls back to targetPosRecalcDistance (0.1y).
+    bool isPathTo(std::vector<WorldPosition> const& path, float const maxDistance = 0.0f,
+                  float const maxZDistance = 2.0f) const
     {
-        return !path.empty() && distance(path.back()) < maxDistance;
-    };
+        if (path.empty())
+            return false;
+        WorldPosition const& back = path.back();
+        if (back.GetMapId() != GetMapId())
+            return false;
+        float const realMax = maxDistance > 0.0f ? maxDistance
+                                                 : sPlayerbotAIConfig.targetPosRecalcDistance;
+        if (GetExactDist2dSq(&back) >= realMax * realMax)
+            return false;
+        return std::fabs(back.GetPositionZ() - GetPositionZ()) < maxZDistance;
+    }
     bool cropPathTo(std::vector<WorldPosition>& path, float maxDistance = sPlayerbotAIConfig.targetPosRecalcDistance);
     bool canPathTo(WorldPosition endPos, Unit* bot) { return endPos.isPathTo(getPathTo(endPos, bot)); }
 
@@ -507,9 +518,15 @@ public:
         radiusMin = radiusMin1;
         radiusMax = radiusMax1;
     }
-    virtual ~TravelDestination() = default;
+    virtual ~TravelDestination();
 
-    void addPoint(WorldPosition* pos) { points.push_back(pos); }
+    void addPoint(WorldPosition* pos)
+    {
+        if (!pos)
+            return;
+
+        points.push_back(new WorldPosition(*pos));
+    }
 
     void setExpireDelay(uint32 delay) { expireDelay = delay; }
 
@@ -673,7 +690,7 @@ public:
     bool isActive(Player* bot) override;
     virtual CreatureTemplate const* GetCreatureTemplate();
     std::string const getName() override { return "RpgTravelDestination"; }
-    int32 getEntry() override { return 0; }
+    int32 getEntry() override { return entry; }
     std::string const getTitle() override;
 
 protected:
@@ -846,6 +863,21 @@ protected:
 class TravelMgr
 {
 public:
+    struct NpcLocation
+    {
+        WorldLocation loc;
+        uint32 entry;
+    };
+
+    struct FlightMasterInfo
+    {
+        WorldPosition pos;
+        uint32        zoneId;          // resolved once at cache load
+        uint32        taxiNodeId;      // DBC taxi node nearest to this flight master
+        uint32        templateEntry;   // creature template ID (for ObjectGuid construction)
+        uint32        dbGuid;          // DB spawn GUID (for ObjectGuid construction)
+    };
+
     static TravelMgr& instance()
     {
         static TravelMgr instance;
@@ -858,12 +890,14 @@ public:
 
     // Navigation
     void Init();
-    Creature* GetNearestFlightMaster(Player* bot);
-    ObjectGuid GetNearestFlightMasterGuid(Player* bot);
+
+    FlightMasterInfo const* GetNearestFlightMasterInfo(Player* bot) const;
     std::vector<std::vector<uint32>> GetOptimalFlightDestinations(Player* bot);
     const std::vector<WorldLocation> GetTeleportLocations(Player* bot);
     const std::vector<WorldLocation> GetTravelHubs(Player* bot);
     std::vector<WorldLocation> GetCityLocations(Player* bot);
+    std::vector<uint32> GetFlightNodesInZone(uint32 zoneId, TeamId team, uint32 excludeNode = 0) const;
+    bool SelectAuctioneerByMap(Player* bot, NpcLocation& outAuctioneer);
     const std::vector<WorldLocation>& GetLocsPerLevelCache(uint8 level) { return locsPerLevelCache[level]; }
 
     template <class D, class W, class URBG>
@@ -968,18 +1002,14 @@ private:
         bool InsideBracket(uint32 val) const { return val >= low && val <= high; }
     };
 
-    struct BankerLocation
-    {
-        WorldLocation loc;
-        uint32 entry;
-    };
-
     // Navigation caches
-    std::map<uint32, WorldPosition> allianceFlightMasterCache;
-    std::map<uint32, WorldPosition> hordeFlightMasterCache;
+    std::map<uint32, FlightMasterInfo> allianceFlightMasterCache;
+    std::map<uint32, FlightMasterInfo> hordeFlightMasterCache;
     std::map<uint8, std::vector<WorldLocation>> allianceHubsPerLevelCache;
     std::map<uint8, std::vector<WorldLocation>> hordeHubsPerLevelCache;
-    std::map<uint8, std::vector<BankerLocation>> bankerLocsPerLevelCache;
+    std::map<uint8, std::vector<NpcLocation>> bankerLocsPerLevelCache;
+    std::unordered_map<uint16, std::unordered_map<uint32, std::vector<NpcLocation>>> hordeAuctioneerCache;
+    std::unordered_map<uint16, std::unordered_map<uint32, std::vector<NpcLocation>>> allianceAuctioneerCache;
     std::unordered_map<uint32, WorldLocation> bankerEntryToLocation;
     std::map<uint8, std::vector<WorldLocation>> locsPerLevelCache;
     std::unordered_map<uint32, std::vector<WorldLocation>> creatureSpawnsByTemplate;
