@@ -3004,8 +3004,8 @@ bool MovementAction::CheckSplineProgress(TravelPlan& state)
             return true;  // Arrived
         }
 
-        // If we haven't arrived to destination, but are done moving then something interrupted it.
-        // Need to restart. Reset state
+        // Spline finalized short of target — interrupted (combat/knockback/etc).
+        // Caller will re-launch.
         state.splineActive = false;
         return false;
     }
@@ -3032,7 +3032,10 @@ bool MovementAction::LaunchWalkSpline(TravelPlan& state)
         return false;
     }
 
-    // Trim to current position
+
+    // Trim past any stored points the bot has already moved past — useful
+    // when a spline is interrupted (combat, knockback, mid-spline reissue)
+    // and we re-launch from a position later in the route.
     G3D::Vector3 botPos(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
     float closestDist = FLT_MAX;
     size_t closestIdx = 0;
@@ -3047,7 +3050,6 @@ bool MovementAction::LaunchWalkSpline(TravelPlan& state)
     }
     if (closestIdx > 0)
         state.walkPoints.erase(state.walkPoints.begin(), state.walkPoints.begin() + closestIdx);
-    state.walkPoints.insert(state.walkPoints.begin(), botPos);
 
     if (state.walkPoints.size() < 2)
     {
@@ -3071,9 +3073,6 @@ bool MovementAction::LaunchWalkSpline(TravelPlan& state)
     state.splineStartTime = getMSTime();
     state.splineActive = true;
 
-    LOG_DEBUG("playerbots", "[TravelPlan] Bot {} walk spline: {} points, {:.0f}y",
-              bot->GetName(), state.walkPoints.size(), totalDist);
-
     return false;  // Walking
 }
 
@@ -3084,8 +3083,7 @@ bool MovementAction::MoveToSpline(TravelPlan& state, WorldPosition target)
 
     // Generate path
     state.walkPoints.clear();
-    PathResult path = GeneratePath(target.GetPositionX(), target.GetPositionY(),
-        target.GetPositionZ());
+    PathResult path = GeneratePath(target.GetPositionX(), target.GetPositionY(), target.GetPositionZ());
     for (auto const& pt : path.points)
         state.walkPoints.push_back(G3D::Vector3(pt.x, pt.y, pt.z));
 
@@ -3104,6 +3102,14 @@ bool MovementAction::GetTravelPlan(TravelPlan& plan, WorldPosition destination)
 {
     WorldPosition botPos(bot->GetMapId(), bot->GetPositionX(),
                          bot->GetPositionY(), bot->GetPositionZ());
+
+    LOG_DEBUG("playerbots",
+        "[TravelPlan] {} requesting plan: from ({:.0f},{:.0f},{:.0f}) map={} zone={} → "
+        "({:.0f},{:.0f},{:.0f}) map={} (straight={:.0f}yd)",
+        bot->GetName(), botPos.GetPositionX(), botPos.GetPositionY(), botPos.GetPositionZ(),
+        bot->GetMapId(), bot->GetZoneId(),
+        destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(),
+        destination.GetMapId(), botPos.fDist(destination));
 
     bool havePlan = sTravelNodeMap.GetFullPath(plan, botPos,
         bot->GetZoneId(), destination);
@@ -3146,16 +3152,66 @@ bool MovementAction::ExecuteTravelPlan(TravelPlan& state)
     switch (pt.type)
     {
         case PathNodeType::NODE_PREPATH:
+        {
+            if (state.stepIdx + 1 >= state.steps.size())
+            {
+                state.stepIdx++;
+                return true;
+            }
+
+            float const botX = bot->GetPositionX();
+            float const botY = bot->GetPositionY();
+            float const botZ = bot->GetPositionZ();
+
+            // Walk forward through the route while distance keeps shrinking.
+            // Once it starts growing we're past the closest waypoint — break.
+            size_t bestIdx = state.stepIdx + 1;
+            float bestDistSq = FLT_MAX;
+            for (size_t i = state.stepIdx + 1; i < state.steps.size(); ++i)
+            {
+                const PathNodePoint& cand = state.steps[i];
+                if (cand.type != PathNodeType::NODE_PATH &&
+                    cand.type != PathNodeType::NODE_NODE)
+                    break;  // stop at portal/transport/etc — can't walk past
+
+                float const dx = cand.point.GetPositionX() - botX;
+                float const dy = cand.point.GetPositionY() - botY;
+                float const dz = cand.point.GetPositionZ() - botZ;
+                float const dSq = dx * dx + dy * dy + dz * dz;
+                if (dSq >= bestDistSq)
+                    break;  // moving away — closest waypoint already found
+
+                bestDistSq = dSq;
+                bestIdx = i;
+            }
+
+            constexpr float ARRIVAL_DIST = 5.0f;
+
+            WorldPosition const& target = state.steps[bestIdx].point;
+            float const distToTarget = bot->GetExactDist(
+                target.GetPositionX(), target.GetPositionY(), target.GetPositionZ());
+
+            if (distToTarget < ARRIVAL_DIST)
+            {
+                state.stepIdx = bestIdx;
+                return true;
+            }
+
+            return MoveTo(target.GetMapId(),
+                target.GetPositionX(), target.GetPositionY(), target.GetPositionZ(),
+                false, false, false, true /*exact_waypoint*/);
+        }
+
         case PathNodeType::NODE_PATH:
         case PathNodeType::NODE_NODE:
         {
-            // Batch consecutive walk points into one spline, capped at 100 points per tick.
-            static constexpr uint32 MAX_SPLINE_POINTS = 100;
+            // Batch consecutive walk points into one spline. Capped small 20 points per tick.
+            static constexpr uint32 MAX_SPLINE_POINTS = 20;
             state.walkPoints.clear();
             while (state.stepIdx < state.steps.size() && state.walkPoints.size() < MAX_SPLINE_POINTS)
             {
                 const PathNodePoint& wp = state.steps[state.stepIdx];
-                if (wp.type != PathNodeType::NODE_PREPATH && wp.type != PathNodeType::NODE_PATH && wp.type != PathNodeType::NODE_NODE)
+                if (wp.type != PathNodeType::NODE_PATH && wp.type != PathNodeType::NODE_NODE)
                     break;
                 state.walkPoints.push_back(G3D::Vector3(wp.point.GetPositionX(), wp.point.GetPositionY(), wp.point.GetPositionZ()));
                 state.stepIdx++;
