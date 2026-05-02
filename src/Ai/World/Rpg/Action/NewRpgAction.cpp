@@ -335,23 +335,16 @@ bool NewRpgDoQuestAction::DoIncompleteQuest(NewRpgInfo::DoQuest& data)
         if (HasNearbyQuestMob(15.0f))
             return false;
 
-        // Occasional yield so attack-anything can pick off a passing
-        // hostile. Gated on "hostile actually in range" so we don't
-        // burn ticks yielding into nothing, and rate-limited so we
-        // don't fight every mob we walk past — multiplier still
-        // dominates, this just opens an occasional window.
-        GuidVector nearbyTargets = AI_VALUE(GuidVector, "possible targets");
-        for (ObjectGuid guid : nearbyTargets)
-        {
-            Unit* u = botAI->GetUnit(guid);
-            if (!u || !u->IsAlive())
-                continue;
-            if (bot->GetDistance(u) > 25.0f)
-                continue;
-            if (urand(0, 9) == 0)  // 10% per tick when a hostile is in range
-                return false;
-            break;
-        }
+        // Note: previously yielded ~10%/tick when any hostile was
+        // within 25y. That overrode the do-quest multiplier in
+        // practice (combined with bots getting aggroed on the way,
+        // which ALSO bypasses the multiplier via combat engine) and
+        // bots ended up grinding their way to POIs instead of
+        // travelling. Quest-mob exception above is kept so we don't
+        // walk past a quest target while gathering. Anything else
+        // hostile is the multiplier's job to throttle — and bots
+        // that DO get aggroed switch to combat engine where the
+        // class strategy handles it.
 
         if (MoveFarTo(data.pos))
             return true;

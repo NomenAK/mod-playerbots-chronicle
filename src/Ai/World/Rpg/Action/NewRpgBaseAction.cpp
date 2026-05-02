@@ -109,9 +109,42 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
     // stones" that aren't on the actual route.
     bool tryNodes = (dis >= nodeFirstDis && sPlayerbotAIConfig.enableTravelNodes);
 
+    // Loop-breaker: count recent attempts of each strategy to this
+    // dest. If 3 of one strategy → flip to the other. If both have
+    // failed 3 times each → both exhausted; fall through to
+    // MoveFar:spline and rely on UnstuckAction (5/10 min) for the
+    // eventual hearthstone-out. Without the "both exhausted" branch
+    // we'd flip-flop forever as the buffer evicts.
+    bool forceMmapOverNodes = false;  // 3 nodes failed -> try mmap
+    bool forceNodesOverMmap = false;  // 3 mmap failed -> try nodes
+    bool bothExhausted = false;
+    if (tryNodes)
+    {
+        int nodeFails = botAI->rpgInfo.CountRecentAttempts(dest, /*wasNodeTravel=*/true);
+        int mmapFails = botAI->rpgInfo.CountRecentAttempts(dest, /*wasNodeTravel=*/false);
+
+        if (nodeFails >= 3 && mmapFails >= 3)
+            bothExhausted = true;  // give up, spline at dest
+        else if (nodeFails >= 3)
+            forceMmapOverNodes = true;
+        else if (mmapFails >= 3)
+            forceNodesOverMmap = true;
+
+        if (forceMmapOverNodes || forceNodesOverMmap || bothExhausted)
+        {
+            // Drop the in-flight plan if any; we're about to flip
+            // (or give up). Buffer is intentionally NOT cleared so
+            // we remember which strategies have already been tried
+            // — otherwise we'd flip-flop indefinitely as the buffer
+            // evicts old entries.
+            if (botAI->rpgInfo.HasActiveTravelPlan())
+                botAI->rpgInfo.ClearTravel();
+        }
+    }
+
     // If a node plan is already active, ride it. The plan executor
     // owns its own per-step transitions.
-    if (tryNodes && botAI->rpgInfo.HasActiveTravelPlan())
+    if (tryNodes && !forceMmapOverNodes && !bothExhausted && botAI->rpgInfo.HasActiveTravelPlan())
         return UpdateTravelPlan();
 
     // 40-step chained mmap probe (cmangos getPathFromPath, ported in
@@ -124,10 +157,13 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
     std::vector<WorldPosition> probe = botPos.getPathTo(dest, bot);
     bool probeReachesDest = dest.isPathTo(probe, sPlayerbotAIConfig.spellDistance);
 
-    if (tryNodes && !probeReachesDest)
+    bool wantNodes = (tryNodes && !forceMmapOverNodes && !bothExhausted)
+                     && (!probeReachesDest || forceNodesOverMmap);
+    if (wantNodes)
     {
-        // Long-distance move and mmap couldn't get within spellDistance
-        // of the destination — commit to the travel-node graph
+        // Long-distance move and either mmap couldn't get within
+        // spellDistance OR we're forcing nodes after 3 failed mmap
+        // loops — commit to the travel-node graph
         // (cmangos TravelNode.cpp:1907 buildPath branch).
         StartTravelPlan(dest);
         if (botAI->rpgInfo.HasActiveTravelPlan())
@@ -137,6 +173,7 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
             // (TravelPlan:walk/segment/...) continue from the executor.
             EmitDebugMove("MoveFar:nodetravel",
                           dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ());
+            botAI->rpgInfo.RecordMoveFarAttempt(dest, /*wasNodeTravel=*/true);
             return UpdateTravelPlan();
         }
         // else: graph returned no plan — fall through to mmap best-effort
@@ -144,7 +181,8 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
     else if (botAI->rpgInfo.HasActiveTravelPlan())
     {
         // mmap probe is now close enough OR we crossed below the
-        // node-first threshold — drop any leftover plan from a prior tick.
+        // node-first threshold OR we're forcing mmap — drop any
+        // leftover plan from a prior tick.
         botAI->rpgInfo.ClearTravel();
     }
 
@@ -154,7 +192,10 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
     // endpoint to MoveTo and let the motion master plan its own
     // spline. Functionally equivalent across multiple ticks
     // (incremental progress).
-    if (!probe.empty())
+    // Skip when both routing strategies have failed 3 times each —
+    // the probe is deterministic so it'd just lead back to the same
+    // dead end. Fall through to spline at the dest.
+    if (!probe.empty() && !bothExhausted)
     {
         WorldPosition stepDest = probe.back();
         float endDistToDest = dest.GetExactDist(stepDest.GetPositionX(),
@@ -163,6 +204,7 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
         {
             EmitDebugMove("MoveFar:mmap",
                           stepDest.GetPositionX(), stepDest.GetPositionY(), stepDest.GetPositionZ());
+            botAI->rpgInfo.RecordMoveFarAttempt(dest, /*wasNodeTravel=*/false);
             return MoveTo(bot->GetMapId(), stepDest.GetPositionX(), stepDest.GetPositionY(),
                           stepDest.GetPositionZ(), false, false, false, true);
         }
@@ -170,10 +212,11 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
 
     // cmangos MovementActions.cpp:720 — empty / non-progressing path
     // falls back to dispatching the destination as a single waypoint.
-    // Best-effort spline; stuck-recovery teleport (above) takes over
-    // if this oscillates.
+    // Best-effort spline; UnstuckAction (5/10 min) is the eventual
+    // catch if this loops forever.
     EmitDebugMove("MoveFar:spline",
                   dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ());
+    botAI->rpgInfo.RecordMoveFarAttempt(dest, /*wasNodeTravel=*/false);
     return MoveTo(dest.GetMapId(), dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(),
                   false, false, false, true);
 }

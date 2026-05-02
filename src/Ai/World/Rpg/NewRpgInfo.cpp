@@ -78,6 +78,37 @@ void NewRpgInfo::Reset()
     data = Idle{};
     startT = getMSTime();
     ClearTravel();
+    recentMoveFarAttempts.clear();
+}
+
+void NewRpgInfo::RecordMoveFarAttempt(WorldPosition const& dest, bool wasNodeTravel)
+{
+    if (recentMoveFarAttempts.size() >= 3)
+        recentMoveFarAttempts.pop_front();
+    MoveFarAttempt a;
+    a.dest = dest;
+    a.wasNodeTravel = wasNodeTravel;
+    a.timestamp = getMSTime();
+    recentMoveFarAttempts.push_back(a);
+}
+
+int NewRpgInfo::CountRecentAttempts(WorldPosition const& dest, bool wasNodeTravel) const
+{
+    int count = 0;
+    for (auto const& a : recentMoveFarAttempts)
+    {
+        if (a.wasNodeTravel != wasNodeTravel)
+            continue;
+        // Treat destinations within 10y as "same dest" — small jitter
+        // from quest objective re-resolution shouldn't reset the loop
+        // detector.
+        if (a.dest.GetMapId() != dest.GetMapId())
+            continue;
+        if (a.dest.GetExactDist2dSq(&dest) > 10.0f * 10.0f)
+            continue;
+        ++count;
+    }
+    return count;
 }
 
 NewRpgStatus NewRpgInfo::GetStatus()
