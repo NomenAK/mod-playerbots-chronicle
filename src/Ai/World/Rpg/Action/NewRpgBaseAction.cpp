@@ -234,28 +234,6 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
             for (auto& pt : points)
                 bot->UpdateAllowedPositionZ(pt.x, pt.y, pt.z);
 
-            // Drop waypoints whose segment crosses geometry (Fix B
-            // logic, mirrored from LaunchWalkSpline). A pair of
-            // ground-level waypoints with a mountain between them
-            // would otherwise spline straight through.
-            if (Map* losMap = bot->GetMap())
-            {
-                uint32 const phaseMask = bot->GetPhaseMask();
-                for (size_t i = 1; i < points.size(); /* incremented in body */)
-                {
-                    G3D::Vector3 const& a = points[i - 1];
-                    G3D::Vector3 const& b = points[i];
-                    if (!losMap->isInLineOfSight(a.x, a.y, a.z + 2.0f,
-                            b.x, b.y, b.z + 2.0f, phaseMask, LINEOFSIGHT_ALL_CHECKS,
-                            VMAP::ModelIgnoreFlags::Nothing))
-                    {
-                        points.erase(points.begin() + i);
-                        continue;
-                    }
-                    ++i;
-                }
-            }
-
             if (points.size() >= 2)
             {
                 // Cap the chain at 20 waypoints. Beyond that, the
