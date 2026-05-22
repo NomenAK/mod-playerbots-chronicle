@@ -147,6 +147,11 @@ AiPlayerbot.KeepAltsInGroup = 0
 # Auto-login all player alts as altbots on player login
 AiPlayerbot.BotAutologin = 0
 
+# Comma-separated account names whose characters are logged in as account bots on worldserver startup.
+# These accounts are not added to the random bot account pool unless their names also match RandomBotAccountPrefix.
+# Default: "" (disabled)
+AiPlayerbot.BotAutologinAccounts = ""
+
 # Allow/deny inviting altbots from the player's account
 AiPlayerbot.AllowAccountBots = 1
 

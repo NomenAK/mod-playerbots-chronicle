@@ -194,6 +194,9 @@ bool PlayerbotAIConfig::Initialize()
         unobtainableItems);
 
     botAutologin = sConfigMgr->GetOption<bool>("AiPlayerbot.BotAutologin", false);
+    botAutologinAccounts.clear();
+    LoadListString<std::vector<std::string>>(
+        sConfigMgr->GetOption<std::string>("AiPlayerbot.BotAutologinAccounts", ""), botAutologinAccounts);
     randomBotAutologin = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotAutologin", true);
     minRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MinRandomBots", 500);
     maxRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MaxRandomBots", 500);

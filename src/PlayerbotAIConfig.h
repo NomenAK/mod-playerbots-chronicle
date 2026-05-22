@@ -105,6 +105,7 @@ public:
     uint32 openGoSpell;
     bool randomBotAutologin;
     bool botAutologin;
+    std::vector<std::string> botAutologinAccounts;
     std::string randomBotMapsAsString;
     float probTeleToBankers;
     bool enableWeightTeleToCityBankers;
