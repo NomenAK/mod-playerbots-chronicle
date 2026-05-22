@@ -342,7 +342,7 @@ public:
     PlayerbotsWorldScript() : WorldScript("PlayerbotsWorldScript", {
         WORLDHOOK_ON_BEFORE_WORLD_INITIALIZED,
         WORLDHOOK_ON_UPDATE
-    }) {}
+    }), configuredAccountBotsLoggedIn(false) {}
 
     void OnBeforeWorldInitialized() override
     {
@@ -379,8 +379,16 @@ public:
     void OnUpdate(uint32 diff) override
     {
         PlayerbotWorldThreadProcessor::instance().Update(diff);
+        if (!configuredAccountBotsLoggedIn)
+        {
+            configuredAccountBotsLoggedIn = true;
+            sRandomPlayerbotMgr.LoginConfiguredAccountBots();
+        }
         sRandomPlayerbotMgr.UpdateAI(diff);  // World thread only
     }
+
+private:
+    bool configuredAccountBotsLoggedIn;
 };
 
 class PlayerbotsScript : public PlayerbotScript
