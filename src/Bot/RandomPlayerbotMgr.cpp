@@ -1763,6 +1763,49 @@ void RandomPlayerbotMgr::Init()
     PlayerbotsDatabase.Execute("DELETE FROM playerbots_random_bots WHERE event = 'add'");
 }
 
+void RandomPlayerbotMgr::LoginConfiguredAccountBots()
+{
+    if (!sPlayerbotAIConfig.enabled || sPlayerbotAIConfig.botAutologinAccounts.empty())
+        return;
+
+    for (std::string const& accountName : sPlayerbotAIConfig.botAutologinAccounts)
+    {
+        LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_GET_ACCOUNT_ID_BY_USERNAME);
+        stmt->SetData(0, accountName);
+        PreparedQueryResult accountResult = LoginDatabase.Query(stmt);
+
+        if (!accountResult)
+        {
+            LOG_WARN("playerbots", "Configured bot autologin account '{}' was not found", accountName);
+            continue;
+        }
+
+        uint32 accountId = (*accountResult)[0].Get<uint32>();
+        QueryResult characters = CharacterDatabase.Query(
+            "SELECT guid, name FROM characters WHERE account = {} AND deleteDate IS NULL ORDER BY guid",
+            accountId);
+
+        if (!characters)
+        {
+            LOG_WARN("playerbots", "Configured bot autologin account '{}' has no characters", accountName);
+            continue;
+        }
+
+        do
+        {
+            Field* fields = characters->Fetch();
+            ObjectGuid guid = ObjectGuid::Create<HighGuid::Player>(fields[0].Get<uint32>());
+            std::string const name = fields[1].Get<std::string>();
+
+            if (ObjectAccessor::FindConnectedPlayer(guid))
+                continue;
+
+            LOG_INFO("playerbots", "Autologin configured account bot '{}' from account '{}'", name, accountName);
+            AddPlayerBot(guid, 0);
+        } while (characters->NextRow());
+    }
+}
+
 void RandomPlayerbotMgr::RandomTeleportForLevel(Player* bot)
 {
     if (bot->InBattleground())
@@ -2521,6 +2564,8 @@ void RandomPlayerbotMgr::OnPlayerLogout(Player* player)
 
 void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 {
+    bool const randomBot = IsRandomBot(bot);
+
     if (_isBotLogging)
     {
         LOG_INFO("playerbots", "{}/{} Bot {} logged in", playerBots.size(),
@@ -2532,7 +2577,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
         }
     }
 
-    if (sPlayerbotAIConfig.randomBotFixedLevel)
+    if (randomBot && sPlayerbotAIConfig.randomBotFixedLevel)
     {
         bot->SetPlayerFlag(PLAYER_FLAGS_NO_XP_GAIN);
     }
