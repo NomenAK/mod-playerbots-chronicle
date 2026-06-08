@@ -150,13 +150,16 @@ Tableau cross-repo des gotchas process Capy. Les gotchas projet-spécifiques (G0
 Ce fichier vit dans `.capy/CAPY-PLATFORM.md` de **chaque repo NomenAK** géré par Capy. Quand une règle change ici :
 
 1. Update dans le repo où le besoin émerge.
-2. Propage aux 5 autres repos via `send_task_messages` ou inline edit + 6 PRs distincts.
+2. Propage aux autres repos via `send_task_messages` ou inline edit + une PR/commit par repo.
 3. Note la propagation dans le commit message : `docs(capy): propagate <rule X> across repos NomenAK`.
 
-Repos couverts (au 2026-05-15) :
+Repos couverts (au 2026-06-08) :
 - `NomenAK/Chronicle`
 - `NomenAK/chronicle-launcher`
 - `NomenAK/Omega`
-- `NomenAK/wow335a-ac-portable`
-- `NomenAK/azerothcore-wotlk-chronicle` (fork — `.capy/` fork-local pour éviter conflits upstream)
+- `NomenAK/chronicle-pi-packages`
+- `NomenAK/pi` (upstream agent monorepo — `.capy/` minimal : settings.json setup hook uniquement)
+- `NomenAK/azerothcore-wotlk-chronicle` (fork — `.capy/` fork-local pour éviter conflits upstream ; serveur buildé ailleurs)
 - `NomenAK/mod-playerbots-chronicle` (fork — `.capy/` fork-local idem)
+- `NomenAK/mod-ale-chronicle` (fork module — `.capy/` fork-local idem)
+- `NomenAK/mod-autobalance-chronicle` (fork module — `.capy/` fork-local idem)
