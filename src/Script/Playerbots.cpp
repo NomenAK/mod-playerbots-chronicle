@@ -23,6 +23,7 @@
 #include "DatabaseEnv.h"
 #include "DatabaseLoader.h"
 #include "GuildTaskMgr.h"
+#include "NarrativeCompanion.h"
 #include "PlayerScript.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotGuildMgr.h"
@@ -194,6 +195,15 @@ public:
         {
             return true;
         }
+
+        // Chronicle D027 P2.1d: route a narrative-flagged owned bot's master
+        // whisper to narrative_service instead of the gameplay command parser. When
+        // forwarded, the NL→command translation + whitelist + confirm-gating happen
+        // service-side; a cleared command returns over the decision-poll path and
+        // is queued via the SAME HandleCommand/chatCommands mechanism. Inert unless
+        // a bridge has registered a forward sink (stock behavior otherwise).
+        if (Chronicle::NarrativeCompanion::TryForwardWhisper(player, type, msg, receiver))
+            return false;
 
         botAI->HandleCommand(type, msg, player);
 
