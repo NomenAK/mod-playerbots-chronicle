@@ -619,7 +619,10 @@ void RandomPlayerbotFactory::CreateRandomBots()
         else
             password = accountName;
 
-        sAccountMgr->CreateAccount(accountName, password);
+        // Core base chronicle/main (pre-AccountMgr-singleton): namespace call.
+        // Flip back to sAccountMgr->CreateAccount when the base syncs past the
+        // upstream AccountMgr class/singleton change (cf. module commit ccce14238).
+        AccountMgr::CreateAccount(accountName, password);
 
         LOG_DEBUG("playerbots", "Account {} created for random bots", accountName.c_str());
     }
