@@ -23,6 +23,8 @@
 #include "DatabaseEnv.h"
 #include "DatabaseLoader.h"
 #include "GuildTaskMgr.h"
+#include "NarrativeBridge.h"
+#include "NarrativeCompanion.h"
 #include "PlayerScript.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotGuildMgr.h"
@@ -195,6 +197,15 @@ public:
             return true;
         }
 
+        // Chronicle D027 P2.1d: route a narrative-flagged owned bot's master
+        // whisper to narrative_service instead of the gameplay command parser. When
+        // forwarded, the NL→command translation + whitelist + confirm-gating happen
+        // service-side; a cleared command returns over the decision-poll path and
+        // is queued via the SAME HandleCommand/chatCommands mechanism. Inert unless
+        // a bridge has registered a forward sink (stock behavior otherwise).
+        if (Chronicle::NarrativeCompanion::TryForwardWhisper(player, type, msg, receiver))
+            return false;
+
         botAI->HandleCommand(type, msg, player);
 
         // hotfix; otherwise the server will crash when whispering logout
@@ -226,7 +237,7 @@ public:
         return true;
     }
 
-    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Guild* guild) override
+    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Guild* /*guild*/) override
     {
         if (type != CHAT_MSG_GUILD)
             return true;
@@ -373,6 +384,11 @@ public:
 
         PlayerbotSpellRepository::Instance().Initialize();
 
+        // Chronicle D027: arm the narrative companion seam bridge (polls the
+        // chronicle_narrative_* seam tables; identical to stock when disabled
+        // or when the tables are empty).
+        Chronicle::NarrativeBridge::Initialize();
+
         LOG_INFO("server.loading", "Playerbots World Thread Processor initialized");
     }
 
@@ -385,6 +401,10 @@ public:
             sRandomPlayerbotMgr.LoginConfiguredAccountBots();
         }
         sRandomPlayerbotMgr.UpdateAI(diff);  // World thread only
+
+        // Chronicle D027: pump the narrative seam bridge (flag reconcile +
+        // cleared-command drain). Interval-gated — no DB work per tick.
+        Chronicle::NarrativeBridge::Update(diff);
     }
 
 private:
@@ -453,7 +473,7 @@ public:
             playerbotMgr->HandleMasterOutgoingPacket(*packet);
     }
 
-    void OnPlayerbotUpdate(uint32 diff) override
+    void OnPlayerbotUpdate(uint32 /*diff*/) override
     {
         sRandomPlayerbotMgr.UpdateSessions();  // Per-bot updates only
     }
