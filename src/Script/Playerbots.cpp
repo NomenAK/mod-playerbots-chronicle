@@ -23,6 +23,7 @@
 #include "DatabaseEnv.h"
 #include "DatabaseLoader.h"
 #include "GuildTaskMgr.h"
+#include "NarrativeBridge.h"
 #include "NarrativeCompanion.h"
 #include "PlayerScript.h"
 #include "PlayerbotAIConfig.h"
@@ -383,6 +384,11 @@ public:
 
         PlayerbotSpellRepository::Instance().Initialize();
 
+        // Chronicle D027: arm the narrative companion seam bridge (polls the
+        // chronicle_narrative_* seam tables; identical to stock when disabled
+        // or when the tables are empty).
+        Chronicle::NarrativeBridge::Initialize();
+
         LOG_INFO("server.loading", "Playerbots World Thread Processor initialized");
     }
 
@@ -395,6 +401,10 @@ public:
             sRandomPlayerbotMgr.LoginConfiguredAccountBots();
         }
         sRandomPlayerbotMgr.UpdateAI(diff);  // World thread only
+
+        // Chronicle D027: pump the narrative seam bridge (flag reconcile +
+        // cleared-command drain). Interval-gated — no DB work per tick.
+        Chronicle::NarrativeBridge::Update(diff);
     }
 
 private:

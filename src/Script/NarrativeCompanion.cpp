@@ -10,8 +10,11 @@
 #include <mutex>
 #include <unordered_set>
 
+#include "Log.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "Playerbots.h"
+#include "SharedDefines.h"
 
 namespace Chronicle
 {
@@ -19,11 +22,12 @@ namespace Chronicle
 
     namespace
     {
-        // Per-bot narrative flag registry. Populated by the bridge (the narrative
-        // owner-bot registry) as companions are spawned/identified; empty by
-        // default so the companion path is INERT until a bridge marks bots. A
-        // plain set guarded by a mutex — touched only on (rare) spawn/despawn and
-        // on whisper routing, never on a hot per-frame path.
+        // Per-bot narrative flag registry. Populated at runtime by the seam bridge
+        // (NarrativeBridge reconciles it against the chronicle_narrative_bots seam
+        // table via FlagNarrativeBot/UnflagNarrativeBot); empty by default so the
+        // companion path is INERT until the seam flags bots. A plain set guarded
+        // by a mutex — touched only on (slow-cadence) seam reconcile and on
+        // whisper routing, never on a hot per-frame path.
         std::mutex g_flagMutex;
         std::unordered_set<uint32> g_narrativeBots;
 
@@ -49,6 +53,18 @@ namespace Chronicle
 
         std::lock_guard<std::mutex> lock(g_flagMutex);
         return g_narrativeBots.find(bot->GetGUID().GetCounter()) != g_narrativeBots.end();
+    }
+
+    void NarrativeCompanion::FlagNarrativeBot(uint32 guidLow)
+    {
+        std::lock_guard<std::mutex> lock(g_flagMutex);
+        g_narrativeBots.insert(guidLow);
+    }
+
+    void NarrativeCompanion::UnflagNarrativeBot(uint32 guidLow)
+    {
+        std::lock_guard<std::mutex> lock(g_flagMutex);
+        g_narrativeBots.erase(guidLow);
     }
 
     bool NarrativeCompanion::IsNarrativeOwnedBot(PlayerbotAI* botAI)
@@ -87,6 +103,67 @@ namespace Chronicle
         // (no blocking HTTP on the world thread — G011/G012). It returns true when
         // it consumed the whisper, in which case we suppress native routing.
         return s_sink(whisper);
+    }
+
+    bool NarrativeCompanion::DispatchClearedCommand(uint32 botGuidLow, uint32 masterGuidLow,
+                                                    std::string const& verb, std::string const& command)
+    {
+        // Defense in depth (D027 amendement 2026-06-12, item 2): narrative_service
+        // is the whitelist authority, but a forged/corrupted seam row must be
+        // refused HERE, before anything reaches HandleCommand — with a log.
+        if (!IsWhitelistedVerb(verb))
+        {
+            LOG_WARN("playerbots",
+                     "Chronicle narrative: refused cleared command for bot {} — verb '{}' is not whitelisted",
+                     botGuidLow, verb);
+            return false;
+        }
+
+        if (command.empty())
+        {
+            LOG_WARN("playerbots", "Chronicle narrative: refused empty cleared command for bot {} (verb '{}')",
+                     botGuidLow, verb);
+            return false;
+        }
+
+        // World thread only from here on: live Player* resolution.
+        Player* bot = ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(botGuidLow));
+        if (!bot)
+        {
+            // Not an attack, just timing (bot logged out between clear and drain).
+            LOG_DEBUG("playerbots", "Chronicle narrative: dropped cleared command '{}' — bot {} is not in world",
+                      verb, botGuidLow);
+            return false;
+        }
+
+        PlayerbotAI* const botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot);
+        if (!IsNarrativeOwnedBot(botAI))
+        {
+            LOG_WARN("playerbots",
+                     "Chronicle narrative: refused cleared command '{}' — bot {} is not a narrative-flagged "
+                     "owned companion",
+                     verb, botGuidLow);
+            return false;
+        }
+
+        // G-LOOP-2, mirrored from TryForwardWhisper: the command runs AS the bot's
+        // current master, and only for the master the service cleared it for.
+        Player* master = botAI->GetMaster();
+        if (!master || master->GetGUID().GetCounter() != masterGuidLow)
+        {
+            LOG_WARN("playerbots",
+                     "Chronicle narrative: refused cleared command '{}' for bot {} — master mismatch "
+                     "(cleared for {}, bot serves {})",
+                     verb, botGuidLow, masterGuidLow, master ? master->GetGUID().GetCounter() : 0);
+            return false;
+        }
+
+        // Native mechanism, unchanged (contract §2.3): HandleCommand applies the
+        // fork's own security checks for `master` and pushes a ChatCommandHolder
+        // onto the bot's chatCommands queue. NOTE: if AiPlayerbot.CommandPrefix is
+        // configured (default empty), the seam writer must prepend it.
+        botAI->HandleCommand(CHAT_MSG_WHISPER, command, master);
+        return true;
     }
 
     bool NarrativeCompanion::IsWhitelistedVerb(std::string const& verb)

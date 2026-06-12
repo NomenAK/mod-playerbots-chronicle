@@ -31,11 +31,15 @@
  *    registered sink (the bridge) that MUST enqueue onto a thread-safe queue and
  *    do the HTTP off the world thread; this facade only passes scalars/strings.
  *  - NO LLM call in-game (D014). This facade never calls a model; it routes.
- *  - Whitelist re-checked here (defense in depth): an inbound cleared command is
- *    matched against the mirrored verb whitelist before it reaches HandleCommand,
- *    so a forged decision on the wire cannot smuggle a non-whitelisted command.
+ *  - Whitelist re-checked here (defense in depth): every cleared command enters
+ *    through DispatchClearedCommand, the single decision-poll → HandleCommand
+ *    entry point, which refuses (with a refusal log) any verb outside the
+ *    mirrored whitelist before it can reach HandleCommand. A forged seam row
+ *    cannot smuggle a non-whitelisted command.
  *  - Master only (G-LOOP-2): forwarding requires HasRealPlayerMaster() AND the
- *    whisper's sender == the bot's master.
+ *    whisper's sender == the bot's master; DispatchClearedCommand mirrors the
+ *    same check on the way back (the command only runs for the master the
+ *    service cleared it for).
  */
 
 #ifndef _CHRONICLE_NARRATIVE_COMPANION_H
@@ -88,10 +92,33 @@ namespace Chronicle
         static bool TryForwardWhisper(Player* fromPlayer, uint32 type, std::string const& msg,
                                       Player* receiver);
 
+        // Runtime mutators for the narrative-flag registry (D027 amendement
+        // 2026-06-12, bridge item 1). The registry is the ONLY thing that turns
+        // the (otherwise inert) companion routing on for a given bot. Populated
+        // at runtime by the seam bridge (NarrativeBridge) from the
+        // chronicle_narrative_bots seam table written by narrative_service.
+        // Same mutex guarantees as the readers — callable from any thread,
+        // idempotent.
+        static void FlagNarrativeBot(uint32 guidLow);
+        static void UnflagNarrativeBot(uint32 guidLow);
+
+        // The decision-poll → HandleCommand entry point for cleared bot_action
+        // decisions (contract §2.3; D027 amendement 2026-06-12, bridge item 2).
+        // Re-checks the mirrored verb whitelist (refusing with a log — defense
+        // in depth), the narrative flag, and the (bot, master) pairing
+        // (G-LOOP-2), then queues the native command string via the bot's own
+        // HandleCommand/chatCommands mechanism — no new execution path. MUST be
+        // called on the world thread (resolves live Player*); the bridge calls
+        // it from its world-thread drain. Returns TRUE when the command was
+        // handed to HandleCommand.
+        static bool DispatchClearedCommand(uint32 botGuidLow, uint32 masterGuidLow,
+                                           std::string const& verb, std::string const& command);
+
         // Defense-in-depth whitelist re-check for an inbound cleared command (the
         // verb arriving on the decision-poll path). The canonical list lives in
         // narrative_service (NarrativeService.Toolkit); this mirrors it so a forged
         // decision cannot inject a non-whitelisted command. TRUE = allowed.
+        // Called by DispatchClearedCommand before anything reaches HandleCommand.
         static bool IsWhitelistedVerb(std::string const& verb);
 
     private:
