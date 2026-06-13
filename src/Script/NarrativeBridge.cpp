@@ -40,6 +40,12 @@ namespace Chronicle
         // next poll without tombstones.
         std::unordered_set<uint32> g_appliedFlags;
 
+        // Companions (player-controlled bots) this bridge has already emitted a
+        // "gained" activation for. Diffed each scan so gained/released fire exactly
+        // once per transition (Vague 4 — extend the companion to ALL bots a real
+        // player controls).
+        std::unordered_set<uint32> g_seenCompanions;
+
         // A cleared command the master triggered but that never reached an
         // online bot must not fire much later (a "sell" the master walked away
         // from never executes behind his back). Mirrors the service-side
@@ -212,6 +218,77 @@ namespace Chronicle
             del << ')';
             PlayerbotsDatabase.Execute(del.str());
         }
+
+        // --- companion discovery → activation seam (Vague 4) ---
+
+        // Emit a "gained" activation: the bot is now a player-controlled
+        // companion. narrative_service resolves its deterministic persona and
+        // flags it BEFORE the master's first whisper. Async INSERT (world thread,
+        // returns promptly). The name is the only free-text field → escaped.
+        void EmitActivationGained(NarrativeCompanion::CompanionPresence const& c)
+        {
+            std::string name = c.name;
+            PlayerbotsDatabase.EscapeString(name);
+
+            std::ostringstream ins;
+            ins << "INSERT INTO chronicle_narrative_bot_activations "
+                   "(bot_guid, master_guid, event, class, race, gender, level, bot_name, created_at) "
+                   "VALUES ("
+                << c.botGuid << ',' << c.masterGuid << ",'gained'," << uint32(c.cls) << ','
+                << uint32(c.race) << ',' << uint32(c.gender) << ',' << c.level << ",'" << name
+                << "', NOW())";
+            PlayerbotsDatabase.Execute(ins.str());
+        }
+
+        // Emit a "released" activation: the bot lost its real-player master
+        // (logout / dismiss / BG). narrative_service unflags it. Only the bot guid
+        // is known (the master may be gone) → master_guid 0.
+        void EmitActivationReleased(uint32 botGuidLow)
+        {
+            std::ostringstream ins;
+            ins << "INSERT INTO chronicle_narrative_bot_activations "
+                   "(bot_guid, master_guid, event, created_at) VALUES ("
+                << botGuidLow << ",0,'released', NOW())";
+            PlayerbotsDatabase.Execute(ins.str());
+        }
+
+        // Diff the currently player-controlled companions against the last scan: a
+        // new one emits "gained", a vanished one emits "released". Synchronous but
+        // bounded (CollectActiveCompanions scans the player map under its read
+        // lock); the INSERTs are async. Re-login re-emits "gained" (self-heal if a
+        // prior emit was lost). World thread (called from Update at poll cadence).
+        void DiscoverCompanions()
+        {
+            std::vector<NarrativeCompanion::CompanionPresence> present =
+                NarrativeCompanion::CollectActiveCompanions();
+
+            std::unordered_set<uint32> current;
+            current.reserve(present.size());
+
+            for (NarrativeCompanion::CompanionPresence const& c : present)
+            {
+                current.insert(c.botGuid);
+                if (g_seenCompanions.find(c.botGuid) == g_seenCompanions.end())
+                {
+                    EmitActivationGained(c);
+                    LOG_INFO("playerbots",
+                             "Chronicle narrative bridge: companion gained — bot {} master {}",
+                             c.botGuid, c.masterGuid);
+                }
+            }
+
+            for (uint32 botGuidLow : g_seenCompanions)
+            {
+                if (current.find(botGuidLow) == current.end())
+                {
+                    EmitActivationReleased(botGuidLow);
+                    LOG_INFO("playerbots",
+                             "Chronicle narrative bridge: companion released — bot {}", botGuidLow);
+                }
+            }
+
+            g_seenCompanions = std::move(current);
+        }
     }  // namespace
 
     void NarrativeBridge::Initialize()
@@ -299,5 +376,10 @@ namespace Chronicle
                         DrainReplies(std::move(result));
                     }));
         }
+
+        // Companion discovery (Vague 4): a synchronous player-map diff at the poll
+        // cadence — emits gained/released activation events to the seam so the
+        // service flags/unflags player-controlled companions.
+        DiscoverCompanions();
     }
 }  // namespace Chronicle

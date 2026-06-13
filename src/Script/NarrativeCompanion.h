@@ -47,6 +47,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "Define.h"
 
@@ -63,6 +64,20 @@ namespace Chronicle
         uint32 masterGuid = 0;  // the resolved real-player master's guid (low)
         uint32 chatType = 0;    // CHAT_MSG_WHISPER, ...
         std::string text;       // the master's raw whisper text
+    };
+
+    // A snapshot of one currently player-controlled companion (a bot whose master
+    // is a real player). Pure value type — the discovery scan (Vague 4) hands
+    // these to the bridge so no Player*/PlayerbotAI leaks past the facade.
+    struct CompanionPresence
+    {
+        uint32 botGuid = 0;     // companion guid (low)
+        uint32 masterGuid = 0;  // real-player master guid (low)
+        uint8 cls = 0;          // 3.3.5a class id
+        uint8 race = 0;         // 3.3.5a race id
+        uint8 gender = 0;       // 3.3.5a gender id (0 male / 1 female)
+        uint32 level = 0;       // bot level
+        std::string name;       // bot character name
     };
 
     // The sink the bridge registers to actually forward a CompanionWhisper off the
@@ -84,6 +99,19 @@ namespace Chronicle
         // real-player master AND carries the narrative flag (registry/config —
         // see IsNarrativeFlagged). RNDBots / gameplay bots are never narrative.
         static bool IsNarrativeOwnedBot(PlayerbotAI* botAI);
+
+        // Discovery scan (Vague 4): snapshot every currently player-controlled
+        // companion (HasRealPlayerMaster()) as pure value structs. The bridge
+        // diffs this against what it last emitted to drive the activation seam
+        // (persona resolve + flag on gain, unflag on loss). MUST run on the world
+        // thread (iterates the live player map under the HashMapHolder read lock).
+        static std::vector<CompanionPresence> CollectActiveCompanions();
+
+        // TRUE when the stock playerbot greeting/chatter for `botAI` must be
+        // suppressed because narrative_service owns this bot's speech: any bot with
+        // a real-player master (the companion population). Non-companion bots keep
+        // the fork's stock greeting.
+        static bool SuppressStockGreeting(PlayerbotAI* botAI);
 
         // The single routing decision used by OnPlayerCanUseChat. Returns TRUE
         // when the whisper was forwarded to narrative_service (caller should NOT
