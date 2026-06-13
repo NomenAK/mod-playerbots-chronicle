@@ -31,6 +31,7 @@ namespace Chronicle
         uint32 g_timeSinceLastPoll = 0;
         bool g_flagsQueryInFlight = false;
         bool g_commandsQueryInFlight = false;
+        bool g_repliesQueryInFlight = false;
 
         QueryCallbackProcessor g_queryProcessor;
 
@@ -140,6 +141,77 @@ namespace Chronicle
             del << ')';
             PlayerbotsDatabase.Execute(del.str());
         }
+
+        // Forward sink (D027 amendement 2026-06-13): a master→companion whisper
+        // captured by NarrativeCompanion::TryForwardWhisper is written to the
+        // inbound seam for narrative_service to drain. Runs on the world thread;
+        // the INSERT is async (PlayerbotsDatabase.Execute), so this returns
+        // promptly (G011/G012) and never blocks chat. Returns true to consume the
+        // whisper (suppress native routing). The free-text is escaped — it is the
+        // only user-controlled string written on this seam.
+        bool ForwardWhisperToSeam(CompanionWhisper const& whisper)
+        {
+            std::string text = whisper.text;
+            PlayerbotsDatabase.EscapeString(text);
+
+            std::ostringstream ins;
+            ins << "INSERT INTO chronicle_narrative_bot_whispers "
+                   "(bot_guid, master_guid, chat_type, text, created_at) VALUES ("
+                << whisper.botGuid << ',' << whisper.masterGuid << ',' << whisper.chatType << ",'"
+                << text << "', NOW())";
+            PlayerbotsDatabase.Execute(ins.str());
+            return true;
+        }
+
+        void DrainReplies(QueryResult result)
+        {
+            if (!result)
+                return;
+
+            std::vector<uint32> consumedIds;
+            consumedIds.reserve(kCommandDrainBatch);
+
+            do
+            {
+                Field* fields = result->Fetch();
+                uint32 const id = fields[0].Get<uint32>();
+                uint32 const botGuid = fields[1].Get<uint32>();
+                uint32 const masterGuid = fields[2].Get<uint32>();
+                std::string const text = fields[3].Get<std::string>();
+                int64 const ageSeconds = fields[4].Get<int64>();
+
+                consumedIds.push_back(id);
+
+                if (ageSeconds > kCommandTtlSeconds)
+                {
+                    LOG_WARN("playerbots",
+                             "Chronicle narrative bridge: dropped stale reply {} for bot {} "
+                             "(age {}s > {}s TTL)",
+                             id, botGuid, ageSeconds, kCommandTtlSeconds);
+                    continue;
+                }
+
+                // The facade gates: narrative flag + (bot, master) pairing, then
+                // the bot whispers its master via TellMaster.
+                NarrativeCompanion::DeliverReply(botGuid, masterGuid, text);
+            } while (result->NextRow());
+
+            if (consumedIds.empty())
+                return;
+
+            // At-most-once, like commands: consume whether delivered, refused or
+            // stale. Any retry is owned service-side.
+            std::ostringstream del;
+            del << "DELETE FROM chronicle_narrative_bot_replies WHERE id IN (";
+            for (std::size_t i = 0; i < consumedIds.size(); ++i)
+            {
+                if (i)
+                    del << ',';
+                del << consumedIds[i];
+            }
+            del << ')';
+            PlayerbotsDatabase.Execute(del.str());
+        }
     }  // namespace
 
     void NarrativeBridge::Initialize()
@@ -154,6 +226,12 @@ namespace Chronicle
         // Start "due" so the first reconcile happens right after world start
         // instead of one full interval later.
         g_timeSinceLastPoll = g_pollIntervalMs;
+
+        // Wire the companion forward sink so master→companion whispers land on the
+        // inbound seam. Only when enabled — otherwise TryForwardWhisper finds no
+        // sink and the path stays inert (stock gameplay parsing).
+        if (g_enabled)
+            NarrativeCompanion::SetForwardSink(ForwardWhisperToSeam);
 
         LOG_INFO("playerbots", "Chronicle narrative bridge {} (seam poll every {}s)",
                  g_enabled ? "enabled" : "disabled", seconds);
@@ -202,6 +280,23 @@ namespace Chronicle
                     {
                         g_commandsQueryInFlight = false;
                         DrainCommands(std::move(result));
+                    }));
+        }
+
+        if (!g_repliesQueryInFlight)
+        {
+            g_repliesQueryInFlight = true;
+            std::ostringstream sel;
+            sel << "SELECT id, bot_guid, master_guid, text, "
+                   "TIMESTAMPDIFF(SECOND, created_at, NOW()) "
+                   "FROM chronicle_narrative_bot_replies ORDER BY id ASC LIMIT "
+                << kCommandDrainBatch;
+            g_queryProcessor.AddCallback(
+                PlayerbotsDatabase.AsyncQuery(sel.str())
+                    .WithCallback([](QueryResult result)
+                    {
+                        g_repliesQueryInFlight = false;
+                        DrainReplies(std::move(result));
                     }));
         }
     }

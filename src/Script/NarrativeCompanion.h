@@ -114,6 +114,15 @@ namespace Chronicle
         static bool DispatchClearedCommand(uint32 botGuidLow, uint32 masterGuidLow,
                                            std::string const& verb, std::string const& command);
 
+        // The reply-drain → TellMaster entry point for the companion say-back path
+        // (D027 amendement 2026-06-13, Hybride). Symmetric to
+        // DispatchClearedCommand: resolves the live bot, re-checks the narrative
+        // flag + (bot, master) pairing (G-LOOP-2), then delivers `text` as a
+        // bot→master whisper via the fork's native TellMaster. MUST be called on
+        // the world thread (resolves live Player*); the bridge calls it from its
+        // world-thread reply drain. Returns TRUE when the reply was delivered.
+        static bool DeliverReply(uint32 botGuidLow, uint32 masterGuidLow, std::string const& text);
+
         // Defense-in-depth whitelist re-check for an inbound cleared command (the
         // verb arriving on the decision-poll path). The canonical list lives in
         // narrative_service (NarrativeService.Toolkit); this mirrors it so a forged
