@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <array>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_set>
+#include <vector>
 
 #include "Log.h"
 #include "ObjectAccessor.h"
@@ -74,10 +76,66 @@ namespace Chronicle
         return botAI && botAI->HasRealPlayerMaster() && IsNarrativeFlagged(botAI);
     }
 
+    std::vector<CompanionPresence> NarrativeCompanion::CollectActiveCompanions()
+    {
+        std::vector<CompanionPresence> out;
+
+        // Iterate the live player map under its read lock (same idiom as
+        // TravelMgr). Bounded: a 10-50 player realm + its bots. World thread only.
+        std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+        HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
+
+        for (auto const& itr : players)
+        {
+            Player* const bot = itr.second;
+            if (!bot)
+                continue;
+
+            PlayerbotAI* const botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot);
+            // Companion = a bot with a REAL-player master. RNDBots (no master) and
+            // bot-mastered bots are excluded: the master must be human. This is the
+            // discovery-side half of the strict bot↔bot barrier.
+            if (!botAI || !botAI->HasRealPlayerMaster())
+                continue;
+
+            Player* const master = botAI->GetMaster();
+            if (!master)
+                continue;
+
+            CompanionPresence c;
+            c.botGuid = bot->GetGUID().GetCounter();
+            c.masterGuid = master->GetGUID().GetCounter();
+            c.cls = bot->getClass();
+            c.race = bot->getRace();
+            c.gender = bot->getGender();
+            c.level = bot->GetLevel();
+            c.name = bot->GetName();
+            out.push_back(std::move(c));
+        }
+
+        return out;
+    }
+
+    bool NarrativeCompanion::SuppressStockGreeting(PlayerbotAI* botAI)
+    {
+        // narrative_service owns companion speech: suppress stock chatter for any
+        // bot with a real-player master. Non-companion bots keep stock behavior.
+        return botAI && botAI->HasRealPlayerMaster();
+    }
+
     bool NarrativeCompanion::TryForwardWhisper(Player* fromPlayer, uint32 type, std::string const& msg,
                                                Player* receiver)
     {
         if (!fromPlayer || !receiver)
+            return false;
+
+        // Strict bot↔bot barrier (Vague 4): only a REAL player's whisper ever
+        // enters the narrative path. A bot whispering anything can never trigger
+        // an LLM interaction (anti-loop / anti-cost). Defense in depth — the
+        // master-pairing check below already implies a human sender, but we refuse
+        // a bot sender explicitly and early.
+        PlayerbotAI* const fromAI = PlayerbotsMgr::instance().GetPlayerbotAI(fromPlayer);
+        if (fromAI && !fromAI->IsRealPlayer())
             return false;
 
         PlayerbotAI* const botAI = PlayerbotsMgr::instance().GetPlayerbotAI(receiver);
