@@ -166,6 +166,47 @@ namespace Chronicle
         return true;
     }
 
+    bool NarrativeCompanion::DeliverReply(uint32 botGuidLow, uint32 masterGuidLow,
+                                          std::string const& text)
+    {
+        if (text.empty())
+            return false;
+
+        // World thread only from here on: live Player* resolution.
+        Player* bot = ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(botGuidLow));
+        if (!bot)
+        {
+            // Timing, not an attack (bot logged out between reply write and drain).
+            LOG_DEBUG("playerbots", "Chronicle narrative: dropped reply — bot {} is not in world", botGuidLow);
+            return false;
+        }
+
+        PlayerbotAI* const botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot);
+        if (!IsNarrativeOwnedBot(botAI))
+        {
+            LOG_WARN("playerbots",
+                     "Chronicle narrative: refused reply — bot {} is not a narrative-flagged owned companion",
+                     botGuidLow);
+            return false;
+        }
+
+        // G-LOOP-2, mirrored from DispatchClearedCommand: the say-back only ever
+        // reaches the master the service addressed it to.
+        Player* master = botAI->GetMaster();
+        if (!master || master->GetGUID().GetCounter() != masterGuidLow)
+        {
+            LOG_WARN("playerbots",
+                     "Chronicle narrative: refused reply for bot {} — master mismatch "
+                     "(addressed {}, bot serves {})",
+                     botGuidLow, masterGuidLow, master ? master->GetGUID().GetCounter() : 0);
+            return false;
+        }
+
+        // Native say-back: the bot whispers its master — the same mechanism the
+        // bot already uses for all its master-directed chatter. No new path.
+        return botAI->TellMaster(text);
+    }
+
     bool NarrativeCompanion::IsWhitelistedVerb(std::string const& verb)
     {
         return std::any_of(kWhitelistedVerbs.begin(), kWhitelistedVerbs.end(),
