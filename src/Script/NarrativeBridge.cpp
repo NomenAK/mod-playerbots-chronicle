@@ -225,7 +225,7 @@ namespace Chronicle
         // companion. narrative_service resolves its deterministic persona and
         // flags it BEFORE the master's first whisper. Async INSERT (world thread,
         // returns promptly). The name is the only free-text field → escaped.
-        void EmitActivationGained(NarrativeCompanion::CompanionPresence const& c)
+        void EmitActivationGained(CompanionPresence const& c)
         {
             std::string name = c.name;
             PlayerbotsDatabase.EscapeString(name);
@@ -259,13 +259,13 @@ namespace Chronicle
         // prior emit was lost). World thread (called from Update at poll cadence).
         void DiscoverCompanions()
         {
-            std::vector<NarrativeCompanion::CompanionPresence> present =
+            std::vector<CompanionPresence> present =
                 NarrativeCompanion::CollectActiveCompanions();
 
             std::unordered_set<uint32> current;
             current.reserve(present.size());
 
-            for (NarrativeCompanion::CompanionPresence const& c : present)
+            for (CompanionPresence const& c : present)
             {
                 current.insert(c.botGuid);
                 if (g_seenCompanions.find(c.botGuid) == g_seenCompanions.end())
