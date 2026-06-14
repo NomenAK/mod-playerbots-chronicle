@@ -32,6 +32,7 @@ namespace Chronicle
         bool g_flagsQueryInFlight = false;
         bool g_commandsQueryInFlight = false;
         bool g_repliesQueryInFlight = false;
+        bool g_emotesQueryInFlight = false;
 
         QueryCallbackProcessor g_queryProcessor;
 
@@ -219,6 +220,56 @@ namespace Chronicle
             PlayerbotsDatabase.Execute(del.str());
         }
 
+        // Beta Spec 09 (emote parity): drain narrative_service-written emote rows
+        // and play them via the facade (DeliverEmote → Unit::HandleEmoteCommand).
+        // Symmetric to DrainReplies; at-most-once (consume whether played, refused
+        // or stale). emote_id is a plain uint (no free-text → no escaping).
+        void DrainEmotes(QueryResult result)
+        {
+            if (!result)
+                return;
+
+            std::vector<uint32> consumedIds;
+            consumedIds.reserve(kCommandDrainBatch);
+
+            do
+            {
+                Field* fields = result->Fetch();
+                uint32 const id = fields[0].Get<uint32>();
+                uint32 const botGuid = fields[1].Get<uint32>();
+                uint32 const masterGuid = fields[2].Get<uint32>();
+                uint32 const emoteId = fields[3].Get<uint32>();
+                int64 const ageSeconds = fields[4].Get<int64>();
+
+                consumedIds.push_back(id);
+
+                if (ageSeconds > kCommandTtlSeconds)
+                {
+                    LOG_WARN("playerbots",
+                             "Chronicle narrative bridge: dropped stale emote {} for bot {} "
+                             "(age {}s > {}s TTL)",
+                             id, botGuid, ageSeconds, kCommandTtlSeconds);
+                    continue;
+                }
+
+                NarrativeCompanion::DeliverEmote(botGuid, masterGuid, emoteId);
+            } while (result->NextRow());
+
+            if (consumedIds.empty())
+                return;
+
+            std::ostringstream del;
+            del << "DELETE FROM chronicle_narrative_bot_emotes WHERE id IN (";
+            for (std::size_t i = 0; i < consumedIds.size(); ++i)
+            {
+                if (i)
+                    del << ',';
+                del << consumedIds[i];
+            }
+            del << ')';
+            PlayerbotsDatabase.Execute(del.str());
+        }
+
         // --- companion discovery → activation seam (Vague 4) ---
 
         // Emit a "gained" activation: the bot is now a player-controlled
@@ -374,6 +425,23 @@ namespace Chronicle
                     {
                         g_repliesQueryInFlight = false;
                         DrainReplies(std::move(result));
+                    }));
+        }
+
+        if (!g_emotesQueryInFlight)
+        {
+            g_emotesQueryInFlight = true;
+            std::ostringstream sel;
+            sel << "SELECT id, bot_guid, master_guid, emote_id, "
+                   "TIMESTAMPDIFF(SECOND, created_at, NOW()) "
+                   "FROM chronicle_narrative_bot_emotes ORDER BY id ASC LIMIT "
+                << kCommandDrainBatch;
+            g_queryProcessor.AddCallback(
+                PlayerbotsDatabase.AsyncQuery(sel.str())
+                    .WithCallback([](QueryResult result)
+                    {
+                        g_emotesQueryInFlight = false;
+                        DrainEmotes(std::move(result));
                     }));
         }
 

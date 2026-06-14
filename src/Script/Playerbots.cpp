@@ -219,6 +219,14 @@ public:
 
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Group* group) override
     {
+        // Chronicle Beta Spec 07: a master's PARTY/RAID message to their narrative
+        // companion(s) routes to narrative_service (NL → command/chat) over the same
+        // seam as whispers (carrying the party/raid chat_type), instead of the
+        // gameplay command parser. Non-narrative bots keep the stock path below; the
+        // message still reaches the group normally (we return true).
+        bool const narratable = (type == CHAT_MSG_PARTY || type == CHAT_MSG_PARTY_LEADER ||
+                                 type == CHAT_MSG_RAID || type == CHAT_MSG_RAID_LEADER);
+
         for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
         {
             Player* const member = itr->GetSource();
@@ -229,6 +237,10 @@ public:
             PlayerbotAI* const botAI = PlayerbotsMgr::instance().GetPlayerbotAI(member);
 
             if (botAI == nullptr)
+                continue;
+
+            if (narratable &&
+                Chronicle::NarrativeCompanion::TryForwardGroupChat(player, type, msg, member))
                 continue;
 
             botAI->HandleCommand(type, msg, player);
