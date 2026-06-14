@@ -120,6 +120,14 @@ namespace Chronicle
         static bool TryForwardWhisper(Player* fromPlayer, uint32 type, std::string const& msg,
                                       Player* receiver);
 
+        // Beta Spec 07: a master's PARTY/RAID message to one of their narrative
+        // companions is the SAME routing decision as a whisper — only the chat_type
+        // differs (carried through to the seam). Called per group member from the
+        // Group OnPlayerCanUseChat override; returns TRUE when forwarded (caller
+        // skips that member's native HandleCommand). Master-only (G-LOOP-2) enforced.
+        static bool TryForwardGroupChat(Player* fromPlayer, uint32 type, std::string const& msg,
+                                        Player* member);
+
         // Runtime mutators for the narrative-flag registry (D027 amendement
         // 2026-06-12, bridge item 1). The registry is the ONLY thing that turns
         // the (otherwise inert) companion routing on for a given bot. Populated
@@ -150,6 +158,14 @@ namespace Chronicle
         // the world thread (resolves live Player*); the bridge calls it from its
         // world-thread reply drain. Returns TRUE when the reply was delivered.
         static bool DeliverReply(uint32 botGuidLow, uint32 masterGuidLow, std::string const& text);
+
+        // Beta Spec 09 (emote parity): the emote-drain entry point. Symmetric to
+        // DeliverReply — resolves the live bot, re-checks the narrative flag +
+        // (bot, master) pairing (G-LOOP-2), then plays a one-shot EMOTE_ONESHOT_*
+        // animation via the native Unit::HandleEmoteCommand (the same call the fork
+        // already uses for bot emotes — a new trigger, not a new capability). MUST
+        // run on the world thread. Returns TRUE when the emote was played.
+        static bool DeliverEmote(uint32 botGuidLow, uint32 masterGuidLow, uint32 emoteId);
 
         // Defense-in-depth whitelist re-check for an inbound cleared command (the
         // verb arriving on the decision-poll path). The canonical list lives in

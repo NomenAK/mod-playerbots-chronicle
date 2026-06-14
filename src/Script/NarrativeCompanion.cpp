@@ -163,6 +163,17 @@ namespace Chronicle
         return s_sink(whisper);
     }
 
+    bool NarrativeCompanion::TryForwardGroupChat(Player* fromPlayer, uint32 type, std::string const& msg,
+                                                 Player* member)
+    {
+        // Party/raid chat from a master to their narrative companion is the SAME
+        // routing decision as a whisper — only the chat_type differs (it rides
+        // `type` into the seam). Reuse the whisper path verbatim: real-player
+        // sender + bot↔bot barrier, narrative-owned receiver, and the G-LOOP-2
+        // master pairing are all enforced there.
+        return TryForwardWhisper(fromPlayer, type, msg, member);
+    }
+
     bool NarrativeCompanion::DispatchClearedCommand(uint32 botGuidLow, uint32 masterGuidLow,
                                                     std::string const& verb, std::string const& command)
     {
@@ -263,6 +274,43 @@ namespace Chronicle
         // Native say-back: the bot whispers its master — the same mechanism the
         // bot already uses for all its master-directed chatter. No new path.
         return botAI->TellMaster(text);
+    }
+
+    bool NarrativeCompanion::DeliverEmote(uint32 botGuidLow, uint32 masterGuidLow, uint32 emoteId)
+    {
+        // World thread only from here on: live Player* resolution.
+        Player* bot = ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(botGuidLow));
+        if (!bot)
+        {
+            LOG_DEBUG("playerbots", "Chronicle narrative: dropped emote — bot {} is not in world", botGuidLow);
+            return false;
+        }
+
+        PlayerbotAI* const botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot);
+        if (!IsNarrativeOwnedBot(botAI))
+        {
+            LOG_WARN("playerbots",
+                     "Chronicle narrative: refused emote — bot {} is not a narrative-flagged owned companion",
+                     botGuidLow);
+            return false;
+        }
+
+        // G-LOOP-2, mirrored from DeliverReply: the emote is a companion action for
+        // its own master's context only.
+        Player* master = botAI->GetMaster();
+        if (!master || master->GetGUID().GetCounter() != masterGuidLow)
+        {
+            LOG_WARN("playerbots",
+                     "Chronicle narrative: refused emote for bot {} — master mismatch "
+                     "(addressed {}, bot serves {})",
+                     botGuidLow, masterGuidLow, master ? master->GetGUID().GetCounter() : 0);
+            return false;
+        }
+
+        // Native one-shot emote — the same EMOTE_ONESHOT_* mechanism the fork
+        // already uses for bot emotes (a new trigger, not a new capability).
+        bot->HandleEmoteCommand(emoteId);
+        return true;
     }
 
     bool NarrativeCompanion::IsWhitelistedVerb(std::string const& verb)
