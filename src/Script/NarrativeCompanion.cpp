@@ -21,6 +21,7 @@
 namespace Chronicle
 {
     CompanionForwardSink NarrativeCompanion::s_sink = nullptr;
+    ChannelCaptureSink NarrativeCompanion::s_channelSink = nullptr;
 
     namespace
     {
@@ -43,6 +44,8 @@ namespace Chronicle
     }  // namespace
 
     void NarrativeCompanion::SetForwardSink(CompanionForwardSink sink) { s_sink = std::move(sink); }
+
+    void NarrativeCompanion::SetChannelSink(ChannelCaptureSink sink) { s_channelSink = std::move(sink); }
 
     bool NarrativeCompanion::IsNarrativeFlagged(PlayerbotAI* botAI)
     {
@@ -310,6 +313,72 @@ namespace Chronicle
         // Native one-shot emote — the same EMOTE_ONESHOT_* mechanism the fork
         // already uses for bot emotes (a new trigger, not a new capability).
         bot->HandleEmoteCommand(emoteId);
+        return true;
+    }
+
+    void NarrativeCompanion::CaptureChannelMessage(Player* sender, std::string const& channelName,
+                                                   std::string const& msg)
+    {
+        if (!sender || msg.empty() || !s_channelSink)
+            return;
+
+        // Only REAL players are ever captured — a bot's channel chatter must never
+        // enter the narrative path (anti bot↔bot / anti-cost).
+        PlayerbotAI* const fromAI = PlayerbotsMgr::instance().GetPlayerbotAI(sender);
+        if (fromAI && !fromAI->IsRealPlayer())
+            return;
+
+        ChannelMessage m;
+        m.senderGuid = sender->GetGUID().GetCounter();
+        m.channel = channelName;
+        m.text = msg;
+
+        // Fire-and-forget: the sink hands off to a thread-safe queue (async INSERT)
+        // and returns promptly. Never suppresses the channel line.
+        s_channelSink(m);
+    }
+
+    bool NarrativeCompanion::DeliverChannelResponse(uint32 botGuidLow, uint32 targetGuidLow,
+                                                    std::string const& text)
+    {
+        if (text.empty())
+            return false;
+
+        // World thread only from here on: live Player* resolution.
+        Player* bot = ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(botGuidLow));
+        if (!bot)
+        {
+            LOG_DEBUG("playerbots", "Chronicle narrative: dropped channel reply — bot {} not in world", botGuidLow);
+            return false;
+        }
+
+        // The responder must be an actual bot (matchmaking elects from the bot pool).
+        PlayerbotAI* const botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot);
+        if (!botAI || botAI->IsRealPlayer())
+        {
+            LOG_WARN("playerbots", "Chronicle narrative: refused channel reply — {} is not a bot", botGuidLow);
+            return false;
+        }
+
+        Player* target = ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(targetGuidLow));
+        if (!target)
+        {
+            LOG_DEBUG("playerbots", "Chronicle narrative: dropped channel reply — target {} not online",
+                      targetGuidLow);
+            return false;
+        }
+
+        // Anti bot↔bot: never whisper another bot.
+        PlayerbotAI* const targetAI = PlayerbotsMgr::instance().GetPlayerbotAI(target);
+        if (targetAI && !targetAI->IsRealPlayer())
+        {
+            LOG_WARN("playerbots", "Chronicle narrative: refused channel reply — target {} is a bot",
+                     targetGuidLow);
+            return false;
+        }
+
+        // Native bot→player whisper — the matchmaking response (Player::Whisper).
+        bot->Whisper(text, LANG_UNIVERSAL, target);
         return true;
     }
 

@@ -33,6 +33,8 @@ namespace Chronicle
         bool g_commandsQueryInFlight = false;
         bool g_repliesQueryInFlight = false;
         bool g_emotesQueryInFlight = false;
+        bool g_channelsEnabled = false;
+        bool g_channelRepliesQueryInFlight = false;
 
         QueryCallbackProcessor g_queryProcessor;
 
@@ -220,6 +222,70 @@ namespace Chronicle
             PlayerbotsDatabase.Execute(del.str());
         }
 
+        // Beta Spec 09 (social): forward a captured global-channel message to the
+        // matchmaking seam. The two free-text fields are escaped. Async INSERT
+        // (world thread, returns promptly). Inert unless the channel sink is wired.
+        void ForwardChannelToSeam(ChannelMessage const& m)
+        {
+            std::string channel = m.channel;
+            std::string text = m.text;
+            PlayerbotsDatabase.EscapeString(channel);
+            PlayerbotsDatabase.EscapeString(text);
+
+            std::ostringstream ins;
+            ins << "INSERT INTO chronicle_narrative_channel_messages "
+                   "(sender_guid, channel, text, created_at) VALUES ("
+                << m.senderGuid << ",'" << channel << "','" << text << "', NOW())";
+            PlayerbotsDatabase.Execute(ins.str());
+        }
+
+        // Beta Spec 09 (social): drain matchmaking responses (the elected bot
+        // whispers the asker). Symmetric to DrainReplies; at-most-once + TTL.
+        void DrainChannelResponses(QueryResult result)
+        {
+            if (!result)
+                return;
+
+            std::vector<uint32> consumedIds;
+            consumedIds.reserve(kCommandDrainBatch);
+
+            do
+            {
+                Field* fields = result->Fetch();
+                uint32 const id = fields[0].Get<uint32>();
+                uint32 const botGuid = fields[1].Get<uint32>();
+                uint32 const targetGuid = fields[2].Get<uint32>();
+                std::string const text = fields[3].Get<std::string>();
+                int64 const ageSeconds = fields[4].Get<int64>();
+
+                consumedIds.push_back(id);
+
+                if (ageSeconds > kCommandTtlSeconds)
+                {
+                    LOG_WARN("playerbots",
+                             "Chronicle narrative bridge: dropped stale channel reply {} (age {}s > {}s TTL)",
+                             id, ageSeconds, kCommandTtlSeconds);
+                    continue;
+                }
+
+                NarrativeCompanion::DeliverChannelResponse(botGuid, targetGuid, text);
+            } while (result->NextRow());
+
+            if (consumedIds.empty())
+                return;
+
+            std::ostringstream del;
+            del << "DELETE FROM chronicle_narrative_channel_responses WHERE id IN (";
+            for (std::size_t i = 0; i < consumedIds.size(); ++i)
+            {
+                if (i)
+                    del << ',';
+                del << consumedIds[i];
+            }
+            del << ')';
+            PlayerbotsDatabase.Execute(del.str());
+        }
+
         // Beta Spec 09 (emote parity): drain narrative_service-written emote rows
         // and play them via the facade (DeliverEmote → Unit::HandleEmoteCommand).
         // Symmetric to DrainReplies; at-most-once (consume whether played, refused
@@ -361,8 +427,15 @@ namespace Chronicle
         if (g_enabled)
             NarrativeCompanion::SetForwardSink(ForwardWhisperToSeam);
 
-        LOG_INFO("playerbots", "Chronicle narrative bridge {} (seam poll every {}s)",
-                 g_enabled ? "enabled" : "disabled", seconds);
+        // Beta Spec 09 (social): channel capture is OFF by default — opt-in via
+        // worldserver.conf (Chronicle.Channels.Capture). When on, real-player
+        // channel messages are captured to the matchmaking seam.
+        g_channelsEnabled = sConfigMgr->GetOption<bool>("Chronicle.Channels.Capture", false);
+        if (g_enabled && g_channelsEnabled)
+            NarrativeCompanion::SetChannelSink(ForwardChannelToSeam);
+
+        LOG_INFO("playerbots", "Chronicle narrative bridge {} (seam poll every {}s, channels {})",
+                 g_enabled ? "enabled" : "disabled", seconds, g_channelsEnabled ? "on" : "off");
     }
 
     void NarrativeBridge::Update(uint32 diff)
@@ -442,6 +515,23 @@ namespace Chronicle
                     {
                         g_emotesQueryInFlight = false;
                         DrainEmotes(std::move(result));
+                    }));
+        }
+
+        if (g_channelsEnabled && !g_channelRepliesQueryInFlight)
+        {
+            g_channelRepliesQueryInFlight = true;
+            std::ostringstream sel;
+            sel << "SELECT id, bot_guid, target_guid, text, "
+                   "TIMESTAMPDIFF(SECOND, created_at, NOW()) "
+                   "FROM chronicle_narrative_channel_responses ORDER BY id ASC LIMIT "
+                << kCommandDrainBatch;
+            g_queryProcessor.AddCallback(
+                PlayerbotsDatabase.AsyncQuery(sel.str())
+                    .WithCallback([](QueryResult result)
+                    {
+                        g_channelRepliesQueryInFlight = false;
+                        DrainChannelResponses(std::move(result));
                     }));
         }
 
