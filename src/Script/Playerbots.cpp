@@ -277,6 +277,12 @@ public:
 
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Channel* channel) override
     {
+        // Chronicle Beta Spec 09 (social): capture a real player's global-channel
+        // message for the matchmaking service (inert unless Chronicle.Channels.Capture
+        // is enabled). Fire-and-forget — never suppresses the channel line.
+        if (channel != nullptr && type == CHAT_MSG_CHANNEL)
+            Chronicle::NarrativeCompanion::CaptureChannelMessage(player, channel->GetName(), msg);
+
         PlayerbotMgr* const playerbotMgr = PlayerbotsMgr::instance().GetPlayerbotMgr(player);
 
         if (playerbotMgr != nullptr && channel->GetFlags() & 0x18)

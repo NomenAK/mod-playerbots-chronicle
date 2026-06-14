@@ -66,6 +66,16 @@ namespace Chronicle
         std::string text;       // the master's raw whisper text
     };
 
+    // Beta Spec 09 (social): a global-channel message from a REAL player, captured
+    // for the matchmaking service. Pure value type — no Player*/Channel leaks past
+    // the facade. Only real-player senders are ever captured (anti bot↔bot/cost).
+    struct ChannelMessage
+    {
+        uint32 senderGuid = 0;  // real-player sender guid (low)
+        std::string channel;    // channel name (e.g. "LookingForGroup")
+        std::string text;       // the message
+    };
+
     // A snapshot of one currently player-controlled companion (a bot whose master
     // is a real player). Pure value type — the discovery scan (Vague 4) hands
     // these to the bridge so no Player*/PlayerbotAI leaks past the facade.
@@ -87,6 +97,12 @@ namespace Chronicle
     // returning false — without a registered bridge the companion path is inert
     // and the bot behaves exactly as before (safe fallback).
     using CompanionForwardSink = std::function<bool(CompanionWhisper const&)>;
+
+    // Beta Spec 09: the sink the bridge registers to forward a captured channel
+    // message to the matchmaking service (thread-safe queue → async INSERT). The
+    // default sink is unset → channel capture is inert (safe fallback). Fire-and-
+    // forget (void): capturing a channel line never suppresses it.
+    using ChannelCaptureSink = std::function<void(ChannelMessage const&)>;
 
     class NarrativeCompanion
     {
@@ -167,6 +183,25 @@ namespace Chronicle
         // run on the world thread. Returns TRUE when the emote was played.
         static bool DeliverEmote(uint32 botGuidLow, uint32 masterGuidLow, uint32 emoteId);
 
+        // Beta Spec 09 (social) — channel capture. Registered once at bridge init
+        // (only when channel capture is enabled in config).
+        static void SetChannelSink(ChannelCaptureSink sink);
+
+        // Capture a global-channel message for the matchmaking service: forwards to
+        // the channel sink IFF the sender is a REAL player (never a bot — anti
+        // bot↔bot/cost) and a sink is registered. Fire-and-forget; never suppresses
+        // the channel line. Called from the Channel OnPlayerCanUseChat override.
+        static void CaptureChannelMessage(Player* sender, std::string const& channelName,
+                                          std::string const& msg);
+
+        // Beta Spec 09 (social) — the elected bot whispers the asker (the matchmaking
+        // response). Resolves the live bot (must be an actual bot) + the target (must
+        // be a REAL online player — never another bot, anti bot↔bot), then sends a
+        // bot→player whisper via the native Player::Whisper. MUST run on the world
+        // thread. Returns TRUE when delivered.
+        static bool DeliverChannelResponse(uint32 botGuidLow, uint32 targetGuidLow,
+                                           std::string const& text);
+
         // Defense-in-depth whitelist re-check for an inbound cleared command (the
         // verb arriving on the decision-poll path). The canonical list lives in
         // narrative_service (NarrativeService.Toolkit); this mirrors it so a forged
@@ -177,6 +212,7 @@ namespace Chronicle
     private:
         static bool IsNarrativeFlagged(PlayerbotAI* botAI);
         static CompanionForwardSink s_sink;
+        static ChannelCaptureSink s_channelSink;
     };
 }  // namespace Chronicle
 
