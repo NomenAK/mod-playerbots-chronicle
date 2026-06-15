@@ -183,6 +183,21 @@ namespace Chronicle
         // run on the world thread. Returns TRUE when the emote was played.
         static bool DeliverEmote(uint32 botGuidLow, uint32 masterGuidLow, uint32 emoteId);
 
+        // D030 Phase 1 (creature reply seam): deliver a voiced-NPC say-back. This
+        // is the creature analogue of DeliverReply — but a creature is NOT a
+        // Player*, so it resolves the live creature by `creatureEntry` near the
+        // ASKING player (the say-back is always a reply to a real player who just
+        // spoke to it) via Player::FindNearestCreature, then faces that player
+        // (when playerGuidLow > 0), speaks via the native Unit::Say
+        // (LANG_UNIVERSAL — voiced NPCs are faction-neutral), and plays a one-shot
+        // emote via Unit::HandleEmoteCommand (when emoteId > 0). No master gate
+        // (that is a companion-only concept); the bot↔bot barrier does not apply
+        // (the speaker is a world creature, the listener a real player). MUST run
+        // on the world thread (resolves live Player*/Creature*); the bridge calls
+        // it from its world-thread creature-reply drain. Returns TRUE when spoken.
+        static bool DeliverCreatureReply(uint32 creatureEntry, uint32 playerGuidLow,
+                                         std::string const& text, uint32 emoteId);
+
         // Beta Spec 09 (social) — channel capture. Registered once at bridge init
         // (only when channel capture is enabled in config).
         static void SetChannelSink(ChannelCaptureSink sink);
