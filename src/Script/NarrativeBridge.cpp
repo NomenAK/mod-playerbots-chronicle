@@ -32,6 +32,7 @@ namespace Chronicle
         bool g_flagsQueryInFlight = false;
         bool g_commandsQueryInFlight = false;
         bool g_repliesQueryInFlight = false;
+        bool g_creatureRepliesQueryInFlight = false;
         bool g_emotesQueryInFlight = false;
         bool g_channelsEnabled = false;
         bool g_channelRepliesQueryInFlight = false;
@@ -212,6 +213,62 @@ namespace Chronicle
             // stale. Any retry is owned service-side.
             std::ostringstream del;
             del << "DELETE FROM chronicle_narrative_bot_replies WHERE id IN (";
+            for (std::size_t i = 0; i < consumedIds.size(); ++i)
+            {
+                if (i)
+                    del << ',';
+                del << consumedIds[i];
+            }
+            del << ')';
+            PlayerbotsDatabase.Execute(del.str());
+        }
+
+        // D030 Phase 1 (creature reply seam): drain narrative_service-written
+        // voiced-NPC say-back rows and speak them via the facade
+        // (DeliverCreatureReply → Unit::Say + face + emote). Symmetric to
+        // DrainReplies; at-most-once (consume whether spoken, dropped or stale).
+        // This REPLACES the retired chronicle_apply_decision.lua HTTP poll, moving
+        // creature speech onto the same async DB seam as the companion — 0 HTTP in
+        // the world thread, cost independent of the voiced-NPC roster size.
+        void DrainCreatureReplies(QueryResult result)
+        {
+            if (!result)
+                return;
+
+            std::vector<uint32> consumedIds;
+            consumedIds.reserve(kCommandDrainBatch);
+
+            do
+            {
+                Field* fields = result->Fetch();
+                uint32 const id = fields[0].Get<uint32>();
+                uint32 const creatureEntry = fields[1].Get<uint32>();
+                uint32 const playerGuid = fields[2].Get<uint32>();
+                std::string const text = fields[3].Get<std::string>();
+                uint32 const emoteId = fields[4].Get<uint32>();
+                int64 const ageSeconds = fields[5].Get<int64>();
+
+                consumedIds.push_back(id);
+
+                if (ageSeconds > kCommandTtlSeconds)
+                {
+                    LOG_WARN("playerbots",
+                             "Chronicle narrative bridge: dropped stale creature reply {} for entry {} "
+                             "(age {}s > {}s TTL)",
+                             id, creatureEntry, ageSeconds, kCommandTtlSeconds);
+                    continue;
+                }
+
+                // The facade resolves the live creature near the asker, then faces
+                // + speaks + emotes. No master gate (a creature is not a companion).
+                NarrativeCompanion::DeliverCreatureReply(creatureEntry, playerGuid, text, emoteId);
+            } while (result->NextRow());
+
+            if (consumedIds.empty())
+                return;
+
+            std::ostringstream del;
+            del << "DELETE FROM chronicle_narrative_creature_replies WHERE id IN (";
             for (std::size_t i = 0; i < consumedIds.size(); ++i)
             {
                 if (i)
@@ -498,6 +555,23 @@ namespace Chronicle
                     {
                         g_repliesQueryInFlight = false;
                         DrainReplies(std::move(result));
+                    }));
+        }
+
+        if (!g_creatureRepliesQueryInFlight)
+        {
+            g_creatureRepliesQueryInFlight = true;
+            std::ostringstream sel;
+            sel << "SELECT id, creature_entry, player_guid, text, emote_id, "
+                   "TIMESTAMPDIFF(SECOND, created_at, NOW()) "
+                   "FROM chronicle_narrative_creature_replies ORDER BY id ASC LIMIT "
+                << kCommandDrainBatch;
+            g_queryProcessor.AddCallback(
+                PlayerbotsDatabase.AsyncQuery(sel.str())
+                    .WithCallback([](QueryResult result)
+                    {
+                        g_creatureRepliesQueryInFlight = false;
+                        DrainCreatureReplies(std::move(result));
                     }));
         }
 

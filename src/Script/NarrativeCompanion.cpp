@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "Creature.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -313,6 +314,61 @@ namespace Chronicle
         // Native one-shot emote — the same EMOTE_ONESHOT_* mechanism the fork
         // already uses for bot emotes (a new trigger, not a new capability).
         bot->HandleEmoteCommand(emoteId);
+        return true;
+    }
+
+    bool NarrativeCompanion::DeliverCreatureReply(uint32 creatureEntry, uint32 playerGuidLow,
+                                                  std::string const& text, uint32 emoteId)
+    {
+        if (text.empty())
+            return false;
+
+        // World thread only from here on: live Player*/Creature* resolution.
+        //
+        // A voiced-NPC say-back is always a reply to a real player who just spoke
+        // to the creature, so the asker is the natural anchor for resolving the
+        // live creature: FindNearestCreature does a bounded grid search around the
+        // player (cheap) instead of scanning a whole continent's creature store by
+        // entry (what the retired O(registry) Lua poll did). The producer always
+        // sends the asker; a 0 guid leaves us no anchor, so we drop the line
+        // (logged) rather than guess where to place it.
+        Player* player = ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(playerGuidLow));
+        if (!player)
+        {
+            // Timing, not an attack (asker changed zone / logged out between the
+            // service write and this drain).
+            LOG_DEBUG("playerbots",
+                      "Chronicle narrative: dropped creature reply — asker {} not in world (entry {})",
+                      playerGuidLow, creatureEntry);
+            return false;
+        }
+
+        // Resolve the live creature near the asker. 100y covers a player drifting
+        // between speaking and the (<=5s) drain — say range is ~25y — while a
+        // stationary voiced NPC the player just addressed is virtually always in.
+        Creature* creature = player->FindNearestCreature(creatureEntry, 100.0f);
+        if (!creature)
+        {
+            LOG_DEBUG("playerbots",
+                      "Chronicle narrative: dropped creature reply — entry {} not found near asker {}",
+                      creatureEntry, playerGuidLow);
+            return false;
+        }
+
+        // Best-effort: turn the creature to face the asker before it speaks.
+        creature->SetFacingToObject(player);
+
+        // Native creature speech — the same Unit::Say the fork already uses for bot
+        // chatter (a new trigger, not a new capability). LANG_UNIVERSAL: voiced
+        // NPCs are faction-neutral (no Common/Orcish split). The text keeps its
+        // accented French + the ✦ glyph (utf8mb4 seam → raw bytes → Say).
+        creature->Say(text, LANG_UNIVERSAL);
+
+        // Optional one-shot emote alongside the line (EMOTE_ONESHOT_* anim id,
+        // validated service-side against NarrativeService.Capabilities).
+        if (emoteId > 0)
+            creature->HandleEmoteCommand(emoteId);
+
         return true;
     }
 
