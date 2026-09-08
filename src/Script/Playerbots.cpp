@@ -23,6 +23,7 @@
 #include "DatabaseEnv.h"
 #include "DatabaseLoader.h"
 #include "GuildTaskMgr.h"
+#include "NarrativeBridge.h"
 #include "NarrativeCompanion.h"
 #include "PlayerScript.h"
 #include "PlayerbotAIConfig.h"
@@ -218,6 +219,14 @@ public:
 
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Group* group) override
     {
+        // Chronicle Beta Spec 07: a master's PARTY/RAID message to their narrative
+        // companion(s) routes to narrative_service (NL → command/chat) over the same
+        // seam as whispers (carrying the party/raid chat_type), instead of the
+        // gameplay command parser. Non-narrative bots keep the stock path below; the
+        // message still reaches the group normally (we return true).
+        bool const narratable = (type == CHAT_MSG_PARTY || type == CHAT_MSG_PARTY_LEADER ||
+                                 type == CHAT_MSG_RAID || type == CHAT_MSG_RAID_LEADER);
+
         for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
         {
             Player* const member = itr->GetSource();
@@ -228,6 +237,10 @@ public:
             PlayerbotAI* const botAI = PlayerbotsMgr::instance().GetPlayerbotAI(member);
 
             if (botAI == nullptr)
+                continue;
+
+            if (narratable &&
+                Chronicle::NarrativeCompanion::TryForwardGroupChat(player, type, msg, member))
                 continue;
 
             botAI->HandleCommand(type, msg, player);
@@ -264,6 +277,12 @@ public:
 
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Channel* channel) override
     {
+        // Chronicle Beta Spec 09 (social): capture a real player's global-channel
+        // message for the matchmaking service (inert unless Chronicle.Channels.Capture
+        // is enabled). Fire-and-forget — never suppresses the channel line.
+        if (channel != nullptr && type == CHAT_MSG_CHANNEL)
+            Chronicle::NarrativeCompanion::CaptureChannelMessage(player, channel->GetName(), msg);
+
         PlayerbotMgr* const playerbotMgr = PlayerbotsMgr::instance().GetPlayerbotMgr(player);
 
         if (playerbotMgr != nullptr && channel->GetFlags() & 0x18)
@@ -352,7 +371,7 @@ public:
     PlayerbotsWorldScript() : WorldScript("PlayerbotsWorldScript", {
         WORLDHOOK_ON_BEFORE_WORLD_INITIALIZED,
         WORLDHOOK_ON_UPDATE
-    }) {}
+    }), configuredAccountBotsLoggedIn(false) {}
 
     void OnBeforeWorldInitialized() override
     {
@@ -383,14 +402,31 @@ public:
 
         PlayerbotSpellRepository::Instance().Initialize();
 
+        // Chronicle D027: arm the narrative companion seam bridge (polls the
+        // chronicle_narrative_* seam tables; identical to stock when disabled
+        // or when the tables are empty).
+        Chronicle::NarrativeBridge::Initialize();
+
         LOG_INFO("server.loading", "Playerbots World Thread Processor initialized");
     }
 
     void OnUpdate(uint32 diff) override
     {
         PlayerbotWorldThreadProcessor::instance().Update(diff);
+        if (!configuredAccountBotsLoggedIn)
+        {
+            configuredAccountBotsLoggedIn = true;
+            sRandomPlayerbotMgr.LoginConfiguredAccountBots();
+        }
         sRandomPlayerbotMgr.UpdateAI(diff);  // World thread only
+
+        // Chronicle D027: pump the narrative seam bridge (flag reconcile +
+        // cleared-command drain). Interval-gated — no DB work per tick.
+        Chronicle::NarrativeBridge::Update(diff);
     }
+
+private:
+    bool configuredAccountBotsLoggedIn;
 };
 
 class PlayerbotsScript : public PlayerbotScript

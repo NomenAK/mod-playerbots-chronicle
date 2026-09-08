@@ -6,6 +6,7 @@
 #include "AcceptInvitationAction.h"
 
 #include "Event.h"
+#include "NarrativeCompanion.h"
 #include "ObjectAccessor.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotSecurity.h"
@@ -55,7 +56,12 @@ bool AcceptInvitationAction::Execute(Event event)
     botAI->ChangeStrategy("+follow,-lfg,-bg", BOT_STATE_NON_COMBAT);
     botAI->Reset();
 
-    botAI->TellMaster("Hello");
+    // Chronicle (Vague 4): narrative_service owns companion speech. Suppress the
+    // stock "Hello" for any bot with a real-player master so the only greeting a
+    // companion gives is the in-character one from the narrative path. Non-
+    // companion bots keep the stock greeting.
+    if (!Chronicle::NarrativeCompanion::SuppressStockGreeting(botAI))
+        botAI->TellMaster("Hello");
 
     if (sPlayerbotAIConfig.summonWhenGroup && bot->GetDistance(inviter) > sPlayerbotAIConfig.sightDistance)
     {

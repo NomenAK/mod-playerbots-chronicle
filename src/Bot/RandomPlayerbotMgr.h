@@ -165,6 +165,7 @@ public:
     static uint8 GetTeamClassIdx(bool isAlliance, uint8 claz) { return isAlliance * 20 + claz; }
 
     void PrepareAddclassCache();
+    void LoginConfiguredAccountBots();
     void Init();
     std::map<uint8, std::unordered_set<ObjectGuid>> addclassCache;
 

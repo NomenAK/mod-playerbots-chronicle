@@ -147,6 +147,11 @@ AiPlayerbot.KeepAltsInGroup = 0
 # Auto-login all player alts as altbots on player login
 AiPlayerbot.BotAutologin = 0
 
+# Comma-separated account names whose characters are logged in as account bots on worldserver startup.
+# These accounts are not added to the random bot account pool unless their names also match RandomBotAccountPrefix.
+# Default: "" (disabled)
+AiPlayerbot.BotAutologinAccounts = ""
+
 # Allow/deny inviting altbots from the player's account
 AiPlayerbot.AllowAccountBots = 1
 
@@ -2432,3 +2437,21 @@ AiPlayerbot.SummonAtInnkeepersEnabled = 1
 # Buffs will be applied on PP, Sindragosa and Lich King
 
 AiPlayerbot.EnableICCBuffs = 1
+
+####################################################################################################
+#   CHRONICLE — NARRATIVE COMPANION SEAM BRIDGE (D027)
+#
+#    Chronicle.NarrativeBridge.Enable
+#        Poll the chronicle_narrative_* seam tables (playerbots database, written by
+#        narrative_service) to flag/unflag narrative companions at runtime and drain cleared
+#        bot_action commands into the bots' native command queue (verb whitelist re-checked
+#        C++-side). With empty seam tables, behavior is identical to stock.
+#        Default: 1
+#
+#    Chronicle.NarrativeBridge.PollIntervalSeconds
+#        Seam poll cadence. Queries run asynchronously (DB worker thread); results are applied
+#        on the world thread. Minimum 1.
+#        Default: 5
+
+Chronicle.NarrativeBridge.Enable = 1
+Chronicle.NarrativeBridge.PollIntervalSeconds = 5
