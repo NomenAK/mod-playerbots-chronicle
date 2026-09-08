@@ -320,7 +320,9 @@ namespace Chronicle
     bool NarrativeCompanion::DeliverCreatureReply(uint32 creatureEntry, uint32 playerGuidLow,
                                                   std::string const& text, uint32 emoteId)
     {
-        if (text.empty())
+        // A reply is a line, a gesture, or both. An empty line with no emote is a
+        // no-op row (the service rejects it upstream; belt and braces here).
+        if (text.empty() && emoteId == 0)
             return false;
 
         // World thread only from here on: live Player*/Creature* resolution.
@@ -362,7 +364,10 @@ namespace Chronicle
         // chatter (a new trigger, not a new capability). LANG_UNIVERSAL: voiced
         // NPCs are faction-neutral (no Common/Orcish split). The text keeps its
         // accented French + the ✦ glyph (utf8mb4 seam → raw bytes → Say).
-        creature->Say(text, LANG_UNIVERSAL);
+        // An empty text is a silent gesture (the agent's `bot_emote` tool): the
+        // creature faces the player and emotes without speaking.
+        if (!text.empty())
+            creature->Say(text, LANG_UNIVERSAL);
 
         // Optional one-shot emote alongside the line (EMOTE_ONESHOT_* anim id,
         // validated service-side against NarrativeService.Capabilities).
